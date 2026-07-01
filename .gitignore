@@ -1,0 +1,9 @@
+*.log
+npm-debug.log*
+coverage/
+packages/*/dist/
+node_modules
+.idea
+dist/
+.DS_Store
+.claude
