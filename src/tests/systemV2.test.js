@@ -933,4 +933,38 @@ describe('justlend v2 utils systemV2', () => {
       {}
     );
   });
+
+  // ---- amount-construction boundary-guard regressions (Low·DeFi 20260708) ----
+  // Every scaled uint256/callValue sink now shares toChainAmount's guard, so a
+  // negative amount is rejected before it can two's-complement-wrap a uint256 —
+  // closing approve's negative→~MAX_UINT256 unlimited-approval footgun (which
+  // approve(MAX) pre-exec simulates OK and can't backstop) and the TRX
+  // callValue/asset paths — with no broadcast attempted.
+  it('approve rejects a negative amount before it can two’s-complement-wrap a uint256', async () => {
+    const token = 'TPYwAC9Y4uUcT2QH3WPPjqxzJSJWymMoMS';
+    const spender = 'THwTBAmVoZTp4NY6HxJUHGDFGerDn9vuEW';
+    await expect(approve(token, spender, { amount: '-1' })).rejects.toThrow(/invalid amount/);
+    expect(blockchain.triggerV2).not.toHaveBeenCalled();
+  });
+
+  it('depositTrxToVault rejects a negative TRX amount before it reaches the callValue', async () => {
+    const vaultAddress = 'TKSz9jGAqLazTbDCm7fS21Dzy7JJ5aeWoS';
+    const receiver = 'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3';
+    await expect(depositTrxToVault(vaultAddress, receiver, '-1')).rejects.toThrow(/invalid TRX amount/);
+    expect(blockchain.triggerV2).not.toHaveBeenCalled();
+  });
+
+  it('borrowTrx rejects a negative TRX amount before it can two’s-complement-wrap the asset uint256', async () => {
+    const marketParams = {
+      borrowAddress: 'TYsbWxNnyTgsZaTFaue9hqpxkU3Fkco94a',
+      collateralAddress: 'TZ8du1HkatTWDbS6FLZei4dQfjfpSm9mxp',
+      oracle: 'TFYLvDFSEW6dKSnWb3mt76hkHAgxPktrnG',
+      irm: 'TQYeFiTVNfJ6jfqjyfL2s93VLG1huaMEzC',
+      lltv: '0.9',
+    };
+    const onBehalf = 'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3';
+    const receiver = 'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3';
+    await expect(borrowTrx(marketParams, '-1', onBehalf, receiver)).rejects.toThrow(/invalid TRX amount/);
+    expect(blockchain.triggerV2).not.toHaveBeenCalled();
+  });
 });
