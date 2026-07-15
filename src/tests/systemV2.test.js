@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { depositToVault, redeemFromVault, supplyCollateral, withdrawCollateral, borrow, repay, depositTrxToVault, redeemTrxFromVault, supplyTrxAsCollateral, borrowTrx, repayWithTrx, withdrawTrxCollateral, estimateSupplyTrxGas, approve, getAllowance, getMerkleRoot, isClaimed, multiClaim, depositTrxToWtrx, getLoanTokenAmountNeed, liquidate, requiresAllowanceReset } from '../utils/systemV2';
+import { depositToVault, redeemFromVault, supplyCollateral, withdrawCollateral, borrow, repay, depositTrxToVault, redeemTrxFromVault, supplyTrxAsCollateral, borrowTrx, repayWithTrx, withdrawTrxCollateral, estimateSupplyTrxGas, approve, getAllowance, getMerkleRoot, isClaimed, multiClaim, depositTrxToWtrx, withdrawTrxFromWtrx, getLoanTokenAmountNeed, liquidate, requiresAllowanceReset } from '../utils/systemV2';
 import * as blockchain from '../utils/blockchain';
 import Config from '../config';
 import BigNumber from 'bignumber.js';
@@ -798,6 +798,33 @@ describe('justlend v2 utils systemV2', () => {
       'deposit()',
       [],
       { callValue: '50000000' }
+    );
+  });
+
+  it('withdrawTrxFromWtrx', async () => {
+    const amount = 100;
+
+    await withdrawTrxFromWtrx(amount).catch(() => {});
+
+    expect(blockchain.triggerV2).toHaveBeenCalledWith(
+      Config.contracts.nile.WtrxContractProxy,
+      'withdraw(uint256)',
+      [{ type: 'uint256', value: '100000000' }], // 100 * 1e6
+      {}
+    );
+  });
+
+  it('withdrawTrxFromWtrx (custom WtrxContractProxy address)', async () => {
+    const amount = 50;
+    const wtrxContractProxy = Config.contracts.main.WtrxContractProxy;
+
+    await withdrawTrxFromWtrx(amount, wtrxContractProxy).catch(() => {});
+
+    expect(blockchain.triggerV2).toHaveBeenCalledWith(
+      wtrxContractProxy,
+      'withdraw(uint256)',
+      [{ type: 'uint256', value: '50000000' }],
+      {}
     );
   });
 

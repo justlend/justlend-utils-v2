@@ -678,6 +678,30 @@ export const depositTrxToWtrx = async (
   return result;
 };
 
+// Unwrap WTRX back into native TRX (1:1) via the WTRX contract's
+// `withdraw(uint256 wad)`. Counterpart to depositTrxToWtrx; WTRX mirrors TRX at
+// 6 decimals so the amount goes through the same `toTrxChainAmount` guard
+// (finite, non-negative, ROUND_DOWN → SUN). No approval needed — you burn your
+// own WTRX — and no callValue (withdraw is non-payable).
+export const withdrawTrxFromWtrx = async (
+  amount,
+  wtrxContractProxy = getContractsAddress('WtrxContractProxy'),
+  options = {},
+) => {
+  //function withdraw(uint256 wad) external
+  const functionSelector = "withdraw(uint256)";
+  const parameters = [
+    { type: "uint256", value: toTrxChainAmount(amount) },
+  ];
+  const result = await triggerV2(
+    wtrxContractProxy,
+    functionSelector,
+    parameters,
+    options,
+  );
+  return result;
+};
+
 export const getLoanTokenAmountNeed = async (
   marketId,
   seizedAssets,
