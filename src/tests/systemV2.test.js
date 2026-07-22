@@ -709,33 +709,49 @@ describe('justlend v2 utils systemV2', () => {
 
   it('getMerkleRoot', async () => {
     const merkleIndex = 0;
+    vi.spyOn(blockchain, 'view').mockResolvedValueOnce([
+      'a'.repeat(64),
+    ]);
 
     const root = await getMerkleRoot(merkleIndex);
 
-    // null when the round is not yet on-chain, otherwise a 0x-prefixed bytes32 string
-    expect(
-      root === null || (typeof root === 'string' && root.startsWith('0x'))
-    ).toBe(true);
+    expect(root).toBe(`0x${'a'.repeat(64)}`);
   });
 
   it('getMerkleRoot (custom merkleDistributor address)', async () => {
     const merkleIndex = 0;
     const merkleDistributor = Config.contracts.nile.MerkleDistributor;
+    vi.spyOn(blockchain, 'view').mockResolvedValueOnce([
+      'b'.repeat(64),
+    ]);
 
     const root = await getMerkleRoot(merkleIndex, merkleDistributor);
 
-    expect(
-      root === null || (typeof root === 'string' && root.startsWith('0x'))
-    ).toBe(true);
+    expect(root).toBe(`0x${'b'.repeat(64)}`);
   });
 
   it('isClaimed', async () => {
     const merkleIndex = 0;
     const index = 0;
+    vi.spyOn(blockchain, 'view').mockResolvedValueOnce(['1']);
 
     const claimed = await isClaimed(merkleIndex, index);
 
     expect(typeof claimed).toBe('boolean');
+    expect(claimed).toBe(true);
+  });
+
+  it('merkle reads fail closed instead of returning not-found sentinels', async () => {
+    vi.spyOn(blockchain, 'view').mockResolvedValue([]);
+    await expect(getMerkleRoot(0)).rejects.toThrow(/Failed to read merkle root/);
+    await expect(isClaimed(0, 1)).rejects.toThrow(/Failed to read claim status/);
+  });
+
+  it('value-moving entry points reject malformed addresses before preflight', async () => {
+    await expect(
+      depositToVault('not-an-address', 1, 6, 'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3')
+    ).rejects.toThrow(/Invalid TRON/);
+    expect(blockchain.triggerV2).not.toHaveBeenCalled();
   });
 
   it('multiClaim (single token)', async () => {
