@@ -695,9 +695,9 @@ describe('justlend v2 utils systemV2', () => {
   });
 
   it('approve requires an explicit amount or unlimited opt-in (no silent MAX default)', async () => {
-    const token = 'TPYwAC9Y4uUcT2QH3WPPjqxzJSJWymMoMS';
+    const tokenAddress = 'TPYwAC9Y4uUcT2QH3WPPjqxzJSJWymMoMS'; // gitleaks:allow -- public TRON address fixture
     const spender = 'THwTBAmVoZTp4NY6HxJUHGDFGerDn9vuEW';
-    await expect(approve(token, spender)).rejects.toThrow(/exact .*amount.*unlimited/i);
+    await expect(approve(tokenAddress, spender)).rejects.toThrow(/exact .*amount.*unlimited/i);
     expect(blockchain.triggerV2).not.toHaveBeenCalled();
   });
 
@@ -984,9 +984,9 @@ describe('justlend v2 utils systemV2', () => {
   // approve(MAX) pre-exec simulates OK and can't backstop) and the TRX
   // callValue/asset paths — with no broadcast attempted.
   it('approve rejects a negative amount before it can two’s-complement-wrap a uint256', async () => {
-    const token = 'TPYwAC9Y4uUcT2QH3WPPjqxzJSJWymMoMS';
+    const tokenAddress = 'TPYwAC9Y4uUcT2QH3WPPjqxzJSJWymMoMS'; // gitleaks:allow -- public TRON address fixture
     const spender = 'THwTBAmVoZTp4NY6HxJUHGDFGerDn9vuEW';
-    await expect(approve(token, spender, { amount: '-1' })).rejects.toThrow(/invalid amount/);
+    await expect(approve(tokenAddress, spender, { amount: '-1' })).rejects.toThrow(/invalid amount/);
     expect(blockchain.triggerV2).not.toHaveBeenCalled();
   });
 
