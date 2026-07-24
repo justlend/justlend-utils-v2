@@ -45,12 +45,7 @@ const configuredFullHost = env.JUSTLEND_FULLHOST || 'https://api.trongrid.io';
 
 const Config = {
   chain: {
-    // Placeholder key (private key = 1) used ONLY to construct the default
-    // read-only TronWeb instance for `view()` calls. Real signing happens via
-    // the injected `tronObj.tronWeb` (browser wallet / Node key) — this value
-    // never holds funds and is not a secret. Do NOT replace it with a real key.
-    privateKey: '01',
-    // Default the read-only TronWeb instance to MAINNET. Override per-deploy via
+    // Default the keyless, read-only TronWeb instance to MAINNET. Override per-deploy via
     // the JUSTLEND_FULLHOST env var (Node), or by injecting `tronObj.tronWeb`
     // (browser wallet / custom node). `process` is guarded so this stays safe in
     // the browser bundle. For testnet use e.g. JUSTLEND_FULLHOST=https://nile.trongrid.io

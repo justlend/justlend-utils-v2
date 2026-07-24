@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { validateTrustedFullHost } from '../config';
+import Config, { validateTrustedFullHost } from '../config';
 
 describe('trusted TRON full-host validation', () => {
+  it('does not embed a default signing key', () => {
+    expect(Config.chain).not.toHaveProperty('privateKey');
+  });
+
   it('accepts official HTTPS and loopback HTTP endpoints', () => {
     expect(validateTrustedFullHost('https://api.trongrid.io/')).toBe('https://api.trongrid.io');
     expect(validateTrustedFullHost('http://127.0.0.1:8090/')).toBe('http://127.0.0.1:8090');

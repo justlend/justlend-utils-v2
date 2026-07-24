@@ -85,8 +85,8 @@ import { TronWeb } from 'tronweb';
 import { tronObj } from 'justlend-v2-utils';
 
 const tronWeb = new TronWeb({
-  fullHost: 'https://nile.trongrid.io', // or Mainnet
-  privateKey: 'YOUR_PRIVATE_KEY'
+  fullHost: 'https://nile.trongrid.io', // use https://api.trongrid.io for Mainnet
+  privateKey: process.env.PRIVATE_KEY
 });
 
 // Inject the instance with private key
@@ -317,21 +317,19 @@ pnpm test
 * **`utils/blockchain.js`**: Core TronWeb instance wrapper, handling transaction triggering, signing, and broadcasting.
 * **`utils/systemV2.js`**: Business logic layer containing all core contract method wrappers for JustLend V2.
 * **`utils/helper.js`**: Utilities for number conversion, formatting, and BigNumber configuration.
-* **`config.js`**: Network configuration (defaults to TRON Mainnet) and trusted RPC-host validation.
+* **`config.js`**: Keyless read-only network configuration (defaults to TRON Mainnet) and trusted RPC-host validation.
 * **`Example.jsx`**: React component example demonstrating how to connect a wallet and call contracts.
 
 ## Configuration
 
-The configuration file is located at `src/config.js`. The read-only default connects to **TRON Mainnet** through `https://api.trongrid.io`. Injected browser or Node.js TronWeb instances are still used for signing.
+The configuration file is located at `src/config.js`. Its **keyless, read-only fallback client** connects to **TRON Mainnet** through `https://api.trongrid.io`. This default cannot sign transactions. Write operations require an explicitly injected browser or Node.js TronWeb instance plus a sender address.
 
-Set `JUSTLEND_FULLHOST=https://nile.trongrid.io` to use Nile in Node.js. The built-in configuration accepts HTTPS TronGrid endpoints and loopback development URLs. For an operator-controlled custom node, also set `JUSTLEND_ALLOW_UNTRUSTED_FULLHOST=true` explicitly.
+Set `JUSTLEND_FULLHOST=https://nile.trongrid.io` to use Nile for the fallback client in Node.js. The built-in configuration accepts HTTPS TronGrid endpoints and loopback development URLs. For an operator-controlled custom node, also set `JUSTLEND_ALLOW_UNTRUSTED_FULLHOST=true` explicitly.
 
 ```javascript
 const Config = {
   chain: {
-    // Non-funded placeholder used only to construct the read-only client.
-    // Real signing uses the injected tronObj.tronWeb instance.
-    privateKey: '01',
+    // No private key is configured for the fallback client.
     fullHost: 'https://api.trongrid.io'
   },
   feeLimit: 200000000,
