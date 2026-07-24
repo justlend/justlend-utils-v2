@@ -7,10 +7,11 @@
 <h1 align="center">JustLend V2 Utils</h1>
 
 <p align="center">
-    <img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg">
-    <img alt="TRON Network" src="https://img.shields.io/badge/Network-TRON-red">
-    <img alt="Protocol: JustLend DAO" src="https://img.shields.io/badge/Protocol-JustLend_DAO-green">
-    <img alt="CI" src="https://github.com/justlend/justlend-utils-v2/actions/workflows/ci.yml/badge.svg">
+  <a href="./LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg"></a>
+  <a href="https://tron.network/"><img alt="TRON Network" src="https://img.shields.io/badge/Network-TRON-red"></a>
+  <a href="https://nodejs.org/"><img alt="Node.js >=20" src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=nodedotjs&amp;logoColor=white"></a>
+  <a href="https://justlend.org/"><img alt="Protocol: JustLend DAO" src="https://img.shields.io/badge/Protocol-JustLend_DAO-green"></a>
+  <a href="https://github.com/justlend/justlend-utils-v2/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/justlend/justlend-utils-v2/actions/workflows/ci.yml/badge.svg?branch=main&amp;event=push"></a>
 </p>
 
 This is a utility library designed for interacting with the JustLend V2 protocol smart contracts on the TRON network. It encapsulates complex contract interaction logic (such as deposits, borrowing, and collateral management) and provides support for both native TRX and TRC20 tokens.
@@ -276,7 +277,7 @@ If you want to contribute or run the example app locally.
 
 **Prerequisites**
 
-* Node.js
+* Node.js 20 or later
 * TronLink Wallet Extension (for frontend interaction)
 
 **Installation & Running**

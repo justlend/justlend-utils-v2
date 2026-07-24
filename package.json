@@ -73,10 +73,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/justlend/justlend-v2-utils.git"
+    "url": "git+https://github.com/justlend/justlend-utils-v2.git"
   },
   "bugs": {
-    "url": "https://github.com/justlend/justlend-v2-utils/issues"
+    "url": "https://github.com/justlend/justlend-utils-v2/issues"
   },
-  "homepage": "https://github.com/justlend/justlend-v2-utils#readme"
+  "homepage": "https://github.com/justlend/justlend-utils-v2#readme",
+  "engines": {
+    "node": ">=20"
+  }
 }
