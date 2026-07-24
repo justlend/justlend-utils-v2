@@ -21,7 +21,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "prepare": "npm run build"
   },
   "license": "Apache-2.0",
   "dependencies": {
