@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { depositToVault, redeemFromVault, supplyCollateral, withdrawCollateral, borrow, repay, depositTrxToVault, redeemTrxFromVault, supplyTrxAsCollateral, borrowTrx, repayWithTrx, withdrawTrxCollateral, estimateSupplyTrxGas, approve, getAllowance, getMerkleRoot, isClaimed, multiClaim, depositTrxToWtrx, getLoanTokenAmountNeed, liquidate, requiresAllowanceReset } from '../utils/systemV2';
+import { depositToVault, redeemFromVault, supplyCollateral, withdrawCollateral, borrow, repay, depositTrxToVault, redeemTrxFromVault, supplyTrxAsCollateral, borrowTrx, repayWithTrx, withdrawTrxCollateral, estimateSupplyTrxGas, approve, getAllowance, getMerkleRoot, isClaimed, multiClaim, depositTrxToWtrx, withdrawTrxFromWtrx, getLoanTokenAmountNeed, liquidate, requiresAllowanceReset } from '../utils/systemV2';
 import * as blockchain from '../utils/blockchain';
 import Config from '../config';
 import BigNumber from 'bignumber.js';
@@ -695,9 +695,9 @@ describe('justlend v2 utils systemV2', () => {
   });
 
   it('approve requires an explicit amount or unlimited opt-in (no silent MAX default)', async () => {
-    const token = 'TPYwAC9Y4uUcT2QH3WPPjqxzJSJWymMoMS';
+    const tokenAddress = 'TPYwAC9Y4uUcT2QH3WPPjqxzJSJWymMoMS'; // gitleaks:allow -- public TRON address fixture
     const spender = 'THwTBAmVoZTp4NY6HxJUHGDFGerDn9vuEW';
-    await expect(approve(token, spender)).rejects.toThrow(/exact .*amount.*unlimited/i);
+    await expect(approve(tokenAddress, spender)).rejects.toThrow(/exact .*amount.*unlimited/i);
     expect(blockchain.triggerV2).not.toHaveBeenCalled();
   });
 
@@ -709,33 +709,49 @@ describe('justlend v2 utils systemV2', () => {
 
   it('getMerkleRoot', async () => {
     const merkleIndex = 0;
+    vi.spyOn(blockchain, 'view').mockResolvedValueOnce([
+      'a'.repeat(64),
+    ]);
 
     const root = await getMerkleRoot(merkleIndex);
 
-    // null when the round is not yet on-chain, otherwise a 0x-prefixed bytes32 string
-    expect(
-      root === null || (typeof root === 'string' && root.startsWith('0x'))
-    ).toBe(true);
+    expect(root).toBe(`0x${'a'.repeat(64)}`);
   });
 
   it('getMerkleRoot (custom merkleDistributor address)', async () => {
     const merkleIndex = 0;
     const merkleDistributor = Config.contracts.nile.MerkleDistributor;
+    vi.spyOn(blockchain, 'view').mockResolvedValueOnce([
+      'b'.repeat(64),
+    ]);
 
     const root = await getMerkleRoot(merkleIndex, merkleDistributor);
 
-    expect(
-      root === null || (typeof root === 'string' && root.startsWith('0x'))
-    ).toBe(true);
+    expect(root).toBe(`0x${'b'.repeat(64)}`);
   });
 
   it('isClaimed', async () => {
     const merkleIndex = 0;
     const index = 0;
+    vi.spyOn(blockchain, 'view').mockResolvedValueOnce(['1']);
 
     const claimed = await isClaimed(merkleIndex, index);
 
     expect(typeof claimed).toBe('boolean');
+    expect(claimed).toBe(true);
+  });
+
+  it('merkle reads fail closed instead of returning not-found sentinels', async () => {
+    vi.spyOn(blockchain, 'view').mockResolvedValue([]);
+    await expect(getMerkleRoot(0)).rejects.toThrow(/Failed to read merkle root/);
+    await expect(isClaimed(0, 1)).rejects.toThrow(/Failed to read claim status/);
+  });
+
+  it('value-moving entry points reject malformed addresses before preflight', async () => {
+    await expect(
+      depositToVault('not-an-address', 1, 6, 'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3')
+    ).rejects.toThrow(/Invalid TRON/);
+    expect(blockchain.triggerV2).not.toHaveBeenCalled();
   });
 
   it('multiClaim (single token)', async () => {
@@ -798,6 +814,33 @@ describe('justlend v2 utils systemV2', () => {
       'deposit()',
       [],
       { callValue: '50000000' }
+    );
+  });
+
+  it('withdrawTrxFromWtrx', async () => {
+    const amount = 100;
+
+    await withdrawTrxFromWtrx(amount).catch(() => {});
+
+    expect(blockchain.triggerV2).toHaveBeenCalledWith(
+      Config.contracts.nile.WtrxContractProxy,
+      'withdraw(uint256)',
+      [{ type: 'uint256', value: '100000000' }], // 100 * 1e6
+      {}
+    );
+  });
+
+  it('withdrawTrxFromWtrx (custom WtrxContractProxy address)', async () => {
+    const amount = 50;
+    const wtrxContractProxy = Config.contracts.main.WtrxContractProxy;
+
+    await withdrawTrxFromWtrx(amount, wtrxContractProxy).catch(() => {});
+
+    expect(blockchain.triggerV2).toHaveBeenCalledWith(
+      wtrxContractProxy,
+      'withdraw(uint256)',
+      [{ type: 'uint256', value: '50000000' }],
+      {}
     );
   });
 
@@ -932,5 +975,39 @@ describe('justlend v2 utils systemV2', () => {
       ],
       {}
     );
+  });
+
+  // ---- amount-construction boundary-guard regressions (Low·DeFi 20260708) ----
+  // Every scaled uint256/callValue sink now shares toChainAmount's guard, so a
+  // negative amount is rejected before it can two's-complement-wrap a uint256 —
+  // closing approve's negative→~MAX_UINT256 unlimited-approval footgun (which
+  // approve(MAX) pre-exec simulates OK and can't backstop) and the TRX
+  // callValue/asset paths — with no broadcast attempted.
+  it('approve rejects a negative amount before it can two’s-complement-wrap a uint256', async () => {
+    const tokenAddress = 'TPYwAC9Y4uUcT2QH3WPPjqxzJSJWymMoMS'; // gitleaks:allow -- public TRON address fixture
+    const spender = 'THwTBAmVoZTp4NY6HxJUHGDFGerDn9vuEW';
+    await expect(approve(tokenAddress, spender, { amount: '-1' })).rejects.toThrow(/invalid amount/);
+    expect(blockchain.triggerV2).not.toHaveBeenCalled();
+  });
+
+  it('depositTrxToVault rejects a negative TRX amount before it reaches the callValue', async () => {
+    const vaultAddress = 'TKSz9jGAqLazTbDCm7fS21Dzy7JJ5aeWoS';
+    const receiver = 'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3';
+    await expect(depositTrxToVault(vaultAddress, receiver, '-1')).rejects.toThrow(/invalid TRX amount/);
+    expect(blockchain.triggerV2).not.toHaveBeenCalled();
+  });
+
+  it('borrowTrx rejects a negative TRX amount before it can two’s-complement-wrap the asset uint256', async () => {
+    const marketParams = {
+      borrowAddress: 'TYsbWxNnyTgsZaTFaue9hqpxkU3Fkco94a',
+      collateralAddress: 'TZ8du1HkatTWDbS6FLZei4dQfjfpSm9mxp',
+      oracle: 'TFYLvDFSEW6dKSnWb3mt76hkHAgxPktrnG',
+      irm: 'TQYeFiTVNfJ6jfqjyfL2s93VLG1huaMEzC',
+      lltv: '0.9',
+    };
+    const onBehalf = 'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3';
+    const receiver = 'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3';
+    await expect(borrowTrx(marketParams, '-1', onBehalf, receiver)).rejects.toThrow(/invalid TRX amount/);
+    expect(blockchain.triggerV2).not.toHaveBeenCalled();
   });
 });

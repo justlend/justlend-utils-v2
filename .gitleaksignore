@@ -1,0 +1,3 @@
+# TRON test token address, not a credential. The variable was renamed in a
+# follow-up commit so squashed histories do not require this fingerprint.
+392b95735f85beb95512805911db6be1bd3c6787:src/tests/systemV2.test.js:generic-api-key:944

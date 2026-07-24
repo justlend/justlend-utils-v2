@@ -7,12 +7,11 @@
 <h1 align="center">JustLend V2 Utils</h1>
 
 <p align="center">
-    <a href="https://nodejs.org/">
-        <img alt="Node Version" src="https://img.shields.io/badge/Node-v20%2B-green?logo=nodedotjs">
-    </a>
-    <a href="./LICENSE">
-      <img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg">
-    </a>
+  <a href="./LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg"></a>
+  <a href="https://tron.network/"><img alt="TRON Network" src="https://img.shields.io/badge/Network-TRON-red"></a>
+  <a href="https://nodejs.org/"><img alt="Node.js >=20" src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=nodedotjs&amp;logoColor=white"></a>
+  <a href="https://justlend.org/"><img alt="Protocol: JustLend DAO" src="https://img.shields.io/badge/Protocol-JustLend_DAO-green"></a>
+  <a href="https://github.com/justlend/justlend-utils-v2/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/justlend/justlend-utils-v2/actions/workflows/ci.yml/badge.svg?branch=main&amp;event=push"></a>
 </p>
 
 This is a utility library designed for interacting with the JustLend V2 protocol smart contracts on the TRON network. It encapsulates complex contract interaction logic (such as deposits, borrowing, and collateral management) and provides support for both native TRX and TRC20 tokens.
@@ -38,7 +37,7 @@ The project includes core blockchain tool wrappers, helper functions, and a Reac
     * Withdrawing Collateral (`withdrawCollateral`)
     * Borrowing (`borrow`)
     * Repaying (`repay`).
-* **Native TRX Support**: Provides specialized proxy methods for handling native TRX interactions (e.g., `depositTrxToVault`, `borrowTrx`, `depositTrxToWtrx` for TRX → WTRX wrapping).
+* **Native TRX Support**: Provides specialized proxy methods for handling native TRX interactions, including `depositTrxToVault`, `borrowTrx`, `depositTrxToWtrx` for TRX → WTRX wrapping, and `withdrawTrxFromWtrx` for WTRX → TRX unwrapping.
 * **Liquidation**: Public-liquidator entry points — preview the loan-token amount required (`getLoanTokenAmountNeed`) and execute the seizure (`liquidate`).
 * **V2 Mining Rewards**: Merkle-based reward distribution — query Merkle root readiness (`getMerkleRoot`), check per-user claim status (`isClaimed`), and batch-claim across rounds (`multiClaim`, with single-token and multi-token / NEW USDD variants).
 * **Energy Estimation**: Includes tools for estimating transaction energy consumption (`estimateSupplyTrxGas`).
@@ -87,8 +86,8 @@ import { TronWeb } from 'tronweb';
 import { tronObj } from 'justlend-v2-utils';
 
 const tronWeb = new TronWeb({
-  fullHost: 'https://nile.trongrid.io', // or Mainnet
-  privateKey: 'YOUR_PRIVATE_KEY'
+  fullHost: 'https://nile.trongrid.io', // use https://api.trongrid.io for Mainnet
+  privateKey: process.env.PRIVATE_KEY
 });
 
 // Inject the instance with private key
@@ -188,13 +187,16 @@ console.log('TxID:', tx.transaction.txID);
 // await liquidate(marketId, borrower, 0, '500000000', 6);
 ```
 
-**Wrap TRX → WTRX**
+**Wrap TRX ↔ WTRX**
 
 ```javascript
-import { depositTrxToWtrx } from 'justlend-v2-utils';
+import { depositTrxToWtrx, withdrawTrxFromWtrx } from 'justlend-v2-utils';
 
 // Wrap 100 TRX into WTRX. Defaults to the network's WtrxContractProxy from config.
 await depositTrxToWtrx(100);
+
+// Unwrap 100 WTRX back into native TRX through WtrxContractProxy.withdraw().
+await withdrawTrxFromWtrx(100);
 ```
 
 **Claim V2 Mining Rewards**
@@ -260,6 +262,7 @@ All main methods are exported from `systemV2.js`:
 | `depositTrxToVault` | Deposit native TRX |
 | `borrowTrx` | Borrow native TRX |
 | `depositTrxToWtrx` | Wrap native TRX into WTRX via `WtrxContractProxy.deposit()` |
+| `withdrawTrxFromWtrx` | Unwrap WTRX into native TRX via `WtrxContractProxy.withdraw()` |
 | `getLoanTokenAmountNeed` | View — preview how many loan tokens are required to seize a given amount of collateral (or to cover a given amount of borrow shares) |
 | `liquidate` | Liquidate an unhealthy position via `PublicLiquidatorProxy` (by `seizedAssets` or by `repaidShares`) |
 | `getMerkleRoot` | View — read the on-chain Merkle root for a mining round (returns `null` if not yet published) |
@@ -274,7 +277,7 @@ If you want to contribute or run the example app locally.
 
 **Prerequisites**
 
-* Node.js
+* Node.js 20 or later
 * TronLink Wallet Extension (for frontend interaction)
 
 **Installation & Running**
@@ -315,18 +318,20 @@ pnpm test
 * **`utils/blockchain.js`**: Core TronWeb instance wrapper, handling transaction triggering, signing, and broadcasting.
 * **`utils/systemV2.js`**: Business logic layer containing all core contract method wrappers for JustLend V2.
 * **`utils/helper.js`**: Utilities for number conversion, formatting, and BigNumber configuration.
-* **`config.js`**: Network configuration (defaults to Nile Testnet) and parameter settings.
+* **`config.js`**: Keyless read-only network configuration (defaults to TRON Mainnet) and trusted RPC-host validation.
 * **`Example.jsx`**: React component example demonstrating how to connect a wallet and call contracts.
 
 ## Configuration
 
-The configuration file is located at `src/config.js`. The default configuration connects to the **Nile Testnet**.
+The configuration file is located at `src/config.js`. Its **keyless, read-only fallback client** connects to **TRON Mainnet** through `https://api.trongrid.io`. This default cannot sign transactions. Write operations require an explicitly injected browser or Node.js TronWeb instance plus a sender address.
+
+Set `JUSTLEND_FULLHOST=https://nile.trongrid.io` to use Nile for the fallback client in Node.js. The built-in configuration accepts HTTPS TronGrid endpoints and loopback development URLs. For an operator-controlled custom node, also set `JUSTLEND_ALLOW_UNTRUSTED_FULLHOST=true` explicitly.
 
 ```javascript
 const Config = {
   chain: {
-    privateKey: '...', // Note: Do not expose private keys in production
-    fullHost: 'https://nile.trongrid.io'
+    // No private key is configured for the fallback client.
+    fullHost: 'https://api.trongrid.io'
   },
   feeLimit: 200000000,
   trxPrecision: 1e6,

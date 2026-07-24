@@ -13,22 +13,46 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+const TRUSTED_TRONGRID_HOSTS = new Set([
+  'api.trongrid.io',
+  'nile.trongrid.io',
+  'shasta.trongrid.io',
+]);
+
+export const validateTrustedFullHost = (input, allowUntrusted = false) => {
+  let url;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new Error(`Invalid JUSTLEND_FULLHOST URL: ${input}`);
+  }
+  const isLoopback = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback)) {
+    throw new Error('JUSTLEND_FULLHOST must use HTTPS (HTTP is allowed only for loopback)');
+  }
+  if (!allowUntrusted && !isLoopback && !TRUSTED_TRONGRID_HOSTS.has(url.hostname)) {
+    throw new Error(
+      `Untrusted JUSTLEND_FULLHOST host: ${url.hostname}. Set ` +
+        'JUSTLEND_ALLOW_UNTRUSTED_FULLHOST=true only for an operator-controlled node.',
+    );
+  }
+  return url.toString().replace(/\/$/, '');
+};
+
+const env =
+  typeof process !== 'undefined' && process.env ? process.env : {};
+const configuredFullHost = env.JUSTLEND_FULLHOST || 'https://api.trongrid.io';
+
 const Config = {
   chain: {
-    // Placeholder key (private key = 1) used ONLY to construct the default
-    // read-only TronWeb instance for `view()` calls. Real signing happens via
-    // the injected `tronObj.tronWeb` (browser wallet / Node key) — this value
-    // never holds funds and is not a secret. Do NOT replace it with a real key.
-    privateKey: '01',
-    // Default the read-only TronWeb instance to MAINNET. Override per-deploy via
+    // Default the keyless, read-only TronWeb instance to MAINNET. Override per-deploy via
     // the JUSTLEND_FULLHOST env var (Node), or by injecting `tronObj.tronWeb`
     // (browser wallet / custom node). `process` is guarded so this stays safe in
     // the browser bundle. For testnet use e.g. JUSTLEND_FULLHOST=https://nile.trongrid.io
-    fullHost:
-      (typeof process !== 'undefined' &&
-        process.env &&
-        process.env.JUSTLEND_FULLHOST) ||
-      'https://api.trongrid.io',
+    fullHost: validateTrustedFullHost(
+      configuredFullHost,
+      env.JUSTLEND_ALLOW_UNTRUSTED_FULLHOST === 'true',
+    ),
   },
   feeLimit: 200000000,
   trxPrecision: 1e6,

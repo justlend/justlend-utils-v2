@@ -20,11 +20,8 @@ const chain = Config.chain;
 
 export const MAX_UINT256 =
   "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-const privateKey = chain.privateKey;
-
 const mainchain = new TronWeb({
   fullHost: chain.fullHost,
-  privateKey,
 });
 
 export const tronObj = {

@@ -33,6 +33,35 @@ const getContractsAddress = (type) => {
  return contracts[getNetworkType()]?.[type]
 }
 
+const assertAddress = (address, label) => {
+  assertTronAddress(address, label);
+  return address;
+};
+
+const assertMarketParams = (marketParams) => {
+  if (!marketParams || typeof marketParams !== 'object') {
+    throw new Error('Invalid market params');
+  }
+  assertAddress(marketParams.borrowAddress, 'loan token address');
+  assertAddress(marketParams.collateralAddress, 'collateral token address');
+  assertAddress(marketParams.oracle, 'oracle address');
+  assertAddress(marketParams.irm, 'interest-rate model address');
+};
+
+// TRX value paths convert a human-readable TRX amount into a SUN uint256
+// (a `callValue` or an `assets` arg). Route them through the same boundary guard
+// as the TRC20 paths' `toChainAmount` — finite, non-negative, ROUND_DOWN integer
+// string — scaling by `trxPrecision` (10^6) so a negative amount can't
+// two's-complement-wrap a uint256, and a NaN/fractional amount can't reach a
+// callValue/asset sink.
+const toTrxChainAmount = (amount) => {
+  const a = new BigNumber(amount);
+  if (!a.isFinite() || a.lt(0)) {
+    throw new Error(`toTrxChainAmount: invalid TRX amount ${amount}`);
+  }
+  return a.times(trxPrecision).integerValue(BigNumber.ROUND_DOWN).toFixed(0);
+};
+
 // True for TetherToken-class tokens (TRON USDT/USDJ) whose `approve` REVERTs on
 // a non-zero→non-zero change and therefore needs an approve(0) reset first.
 // Compares in canonical hex so Base58/hex inputs both match.
@@ -59,6 +88,8 @@ export const depositToVault = async (
   receiver,
   options = {},
 ) => {
+  assertAddress(vaultAddress, "vault address");
+  assertAddress(receiver, "receiver address");
   //function deposit(uint256 assets, address receiver) public returns (uint256 shares)
   const functionSelector = "deposit(uint256,address)";
   const parameters = [
@@ -84,6 +115,9 @@ export const redeemFromVault = async (
   shares,
   options = {},
 ) => {
+  assertAddress(vaultAddress, "vault address");
+  assertAddress(receiver, "receiver address");
+  assertAddress(owner, "owner address");
   //function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256 shares)
   let functionSelector = "withdraw(uint256,address,address)";
   //function redeem(uint256 shares, address payable receiver, address owner) external returns (uint256 assets)
@@ -113,6 +147,9 @@ export const supplyCollateral = async (
   moolahAddress = getContractsAddress('MoolahProxy'),
   options = {},
 ) => {
+  assertMarketParams(marketParams);
+  assertAddress(onBehalf, "on-behalf address");
+  assertAddress(moolahAddress, "Moolah proxy address");
   //function supplyCollateral(MarketParams memory marketParams,uint256 assets,address onBehalf,bytes calldata data)
   const functionSelector =
     "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)";
@@ -156,6 +193,10 @@ export const withdrawCollateral = async (
   moolahAddress = getContractsAddress('MoolahProxy'),
   options = {},
 ) => {
+  assertMarketParams(marketParams);
+  assertAddress(onBehalf, "on-behalf address");
+  assertAddress(receiver, "receiver address");
+  assertAddress(moolahAddress, "Moolah proxy address");
   //function withdrawCollateral(MarketParams calldata marketParams,uint256 assets,address onBehalf,address payable receiver)
   const functionSelector =
     "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)";
@@ -199,6 +240,10 @@ export const borrow = async (
   moolahAddress = getContractsAddress('MoolahProxy'),
   options = {},
 ) => {
+  assertMarketParams(marketParams);
+  assertAddress(onBehalf, "on-behalf address");
+  assertAddress(receiver, "receiver address");
+  assertAddress(moolahAddress, "Moolah proxy address");
   //function borrow(MarketParams calldata marketParams,uint256 assets, uint256 shares,address onBehalf,address payable receiver) external returns (uint256 _assets, uint256 _shares)
   const functionSelector =
     "borrow((address,address,address,address,uint256),uint256,uint256,address,address)";
@@ -243,6 +288,9 @@ export const repay = async (
   moolahAddress = getContractsAddress('MoolahProxy'),
   options = {},
 ) => {
+  assertMarketParams(marketParams);
+  assertAddress(onBehalf, "on-behalf address");
+  assertAddress(moolahAddress, "Moolah proxy address");
   //function repay( MarketParams calldata marketParams,uint256 assets,uint256 shares,address onBehalf,bytes calldata data) external payable returns (uint256 _assets, uint256 _shares)
   const functionSelector =
     "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)";
@@ -288,9 +336,12 @@ export const depositTrxToVault = async (
   trxProviderProxy = getContractsAddress('TrxProviderProxy'),
   options = {},
 ) => {
+  assertAddress(vaultAddress, "vault address");
+  assertAddress(receiver, "receiver address");
+  assertAddress(trxProviderProxy, "TRX provider proxy address");
   //function deposit(address vault, address receiver) public payable returns (uint256 shares)
   const functionSelector = "deposit(address,address)";
-  const callValue = BigNumber(amount).times(trxPrecision).toString();
+  const callValue = toTrxChainAmount(amount);
   const parameters = [
     { type: "address", value: vaultAddress },
     { type: "address", value: receiver },
@@ -315,6 +366,10 @@ export const redeemTrxFromVault = async (
   trxProviderProxy = getContractsAddress('TrxProviderProxy'),
   options = {},
 ) => {
+  assertAddress(vaultAddress, "vault address");
+  assertAddress(receiver, "receiver address");
+  assertAddress(owner, "owner address");
+  assertAddress(trxProviderProxy, "TRX provider proxy address");
   //function withdraw(address vault, uint256 assets, address payable receiver, address owner) external returns (uint256 shares)
   let functionSelector = "withdraw(address,uint256,address,address)";
   //function redeem(address vault, uint256 shares, address payable receiver, address owner) external returns (uint256 assets)
@@ -344,10 +399,13 @@ export const supplyTrxAsCollateral = async (
   trxProviderProxy = getContractsAddress('TrxProviderProxy'),
   options = {},
 ) => {
+  assertMarketParams(marketParams);
+  assertAddress(onBehalf, "on-behalf address");
+  assertAddress(trxProviderProxy, "TRX provider proxy address");
   //function supplyCollateral(MarketParams calldata marketParams,address onBehalf, bytes calldata data) external payable
   const functionSelector =
     "supplyCollateral((address,address,address,address,uint256),address,bytes)";
-  const callValue = BigNumber(amount).times(trxPrecision).toString();
+  const callValue = toTrxChainAmount(amount);
   const {
     borrowAddress: loanToken,
     collateralAddress: collateralToken,
@@ -386,6 +444,10 @@ export const borrowTrx = async (
   trxProviderProxy = getContractsAddress('TrxProviderProxy'),
   options = {},
 ) => {
+  assertMarketParams(marketParams);
+  assertAddress(onBehalf, "on-behalf address");
+  assertAddress(receiver, "receiver address");
+  assertAddress(trxProviderProxy, "TRX provider proxy address");
   //function borrow(MarketParams calldata marketParams,uint256 assets,uint256 shares,address onBehalf, address payable receiver) external returns (uint256 _assets, uint256 _shares)
   const functionSelector =
     "borrow((address,address,address,address,uint256),uint256,uint256,address,address)";
@@ -396,7 +458,7 @@ export const borrowTrx = async (
     irm,
     lltv,
   } = marketParams;
-  const assets = BigNumber(amount).times(trxPrecision).toString();
+  const assets = toTrxChainAmount(amount);
   const parameters = [
     {
       type: "(address,address,address,address,uint256)",
@@ -431,6 +493,9 @@ export const repayWithTrx = async (
   trxProviderProxy = getContractsAddress('TrxProviderProxy'),
   options = {},
 ) => {
+  assertMarketParams(marketParams);
+  assertAddress(onBehalf, "on-behalf address");
+  assertAddress(trxProviderProxy, "TRX provider proxy address");
   //function repay( MarketParams calldata marketParams,uint256 assets,uint256 shares,address onBehalf,bytes calldata data) external payable returns (uint256 _assets, uint256 _shares)
   const functionSelector =
     "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)";
@@ -441,7 +506,7 @@ export const repayWithTrx = async (
     irm,
     lltv,
   } = marketParams;
-  const assets = BigNumber(amount).times(trxPrecision).toString();
+  const assets = toTrxChainAmount(amount);
   let callValue = assets;
   if (sharesCallValueAmount) callValue = sharesCallValueAmount;
 
@@ -479,6 +544,10 @@ export const withdrawTrxCollateral = async (
   trxProviderProxy = getContractsAddress('TrxProviderProxy'),
   options = {},
 ) => {
+  assertMarketParams(marketParams);
+  assertAddress(onBehalf, "on-behalf address");
+  assertAddress(receiver, "receiver address");
+  assertAddress(trxProviderProxy, "TRX provider proxy address");
   const {
     borrowAddress: loanToken,
     collateralAddress: collateralToken,
@@ -489,7 +558,7 @@ export const withdrawTrxCollateral = async (
   //function withdrawCollateral(MarketParams memory marketParams,uint256 assets,address onBehalf,address receiver)
   const functionSelector =
     "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)";
-  const assets = BigNumber(amount).times(trxPrecision).toString();
+  const assets = toTrxChainAmount(amount);
   const parameters = [
     {
       type: "(address,address,address,address,uint256)",
@@ -521,9 +590,12 @@ export const estimateSupplyTrxGas = async (
   trxProviderProxy = getContractsAddress('TrxProviderProxy'),
   options = {},
 ) => {
+  assertAddress(vaultAddress, "vault address");
+  assertAddress(receiver, "receiver address");
+  assertAddress(trxProviderProxy, "TRX provider proxy address");
   //function deposit(address vault, address receiver) public payable returns (uint256 shares)
   const functionSelector = "deposit(address,address)";
-  const callValue = BigNumber(amount).times(trxPrecision).toString();
+  const callValue = toTrxChainAmount(amount);
   const _options = { _isConstant: true, callValue, ...options };
   const parameters = [
     { type: "address", value: vaultAddress },
@@ -560,7 +632,12 @@ export const approve = async (tokenAddress, spenderAddress, options = {}) => {
         "in to MAX_UINT256 approval",
     );
   }
-  const value = amount != null ? amount : MAX_UINT256;
+  // An explicit { amount } is an already-scaled uint256 (base units); still route
+  // it through the toChainAmount boundary guard (decimals 0 = identity scale) so
+  // a negative amount can't two's-complement-wrap to ~MAX_UINT256 — an unlimited
+  // approval that approve(MAX) pre-exec simulates OK and therefore can't backstop.
+  // The explicit { unlimited: true } path keeps MAX_UINT256 unchanged.
+  const value = amount != null ? toChainAmount(amount, 0) : MAX_UINT256;
   const functionSelector = "approve(address,uint256)";
   const buildParams = (v) => [
     { type: "address", value: spenderAddress },
@@ -600,6 +677,9 @@ export const getAllowance = async (
   ownerAddress,
   spenderAddress,
 ) => {
+  assertAddress(tokenAddress, "token address");
+  assertAddress(ownerAddress, "owner address");
+  assertAddress(spenderAddress, "spender address");
   const funcSelector = "allowance(address,address)";
   const parameters = [
     { type: "address", value: ownerAddress },
@@ -620,11 +700,15 @@ export const getMerkleRoot = async (
   merkleIndex,
   merkleDistributorAddress = getContractsAddress('MerkleDistributor'),
 ) => {
+  assertAddress(merkleDistributorAddress, "Merkle distributor address");
   //function merkleRoots(uint256) external view returns (bytes32)
   const funcSelector = "merkleRoots(uint256)";
   const parameters = [{ type: "uint256", value: merkleIndex }];
   const result = await view(merkleDistributorAddress, funcSelector, parameters);
-  return result.length ? `0x${result[0]}` : null;
+  if (!result.length) {
+    throw new Error(`Failed to read merkle root for index ${merkleIndex}`);
+  }
+  return `0x${result[0]}`;
 };
 
 export const isClaimed = async (
@@ -632,6 +716,7 @@ export const isClaimed = async (
   index,
   merkleDistributorAddress = getContractsAddress('MerkleDistributor'),
 ) => {
+  assertAddress(merkleDistributorAddress, "Merkle distributor address");
   //function isClaimed(uint256,uint256) external view returns (bool)
   const funcSelector = "isClaimed(uint256,uint256)";
   const parameters = [
@@ -639,7 +724,10 @@ export const isClaimed = async (
     { type: "uint256", value: index },
   ];
   const result = await view(merkleDistributorAddress, funcSelector, parameters);
-  return result.length ? new BigNumber(result[0], 16).gt(0) : false;
+  if (!result.length) {
+    throw new Error(`Failed to read claim status for index ${merkleIndex}:${index}`);
+  }
+  return new BigNumber(result[0], 16).gt(0);
 };
 
 export const depositTrxToWtrx = async (
@@ -647,14 +735,40 @@ export const depositTrxToWtrx = async (
   wtrxContractProxy = getContractsAddress('WtrxContractProxy'),
   options = {},
 ) => {
+  assertAddress(wtrxContractProxy, "WTRX contract address");
   //function deposit() external payable
   const functionSelector = "deposit()";
-  const callValue = BigNumber(amount).times(trxPrecision).toString();
+  const callValue = toTrxChainAmount(amount);
   const result = await triggerV2(
     wtrxContractProxy,
     functionSelector,
     [],
     { callValue, ...options },
+  );
+  return result;
+};
+
+// Unwrap WTRX back into native TRX (1:1) via the WTRX contract's
+// `withdraw(uint256 wad)`. Counterpart to depositTrxToWtrx; WTRX mirrors TRX at
+// 6 decimals so the amount goes through the same `toTrxChainAmount` guard
+// (finite, non-negative, ROUND_DOWN → SUN). No approval needed — you burn your
+// own WTRX — and no callValue (withdraw is non-payable).
+export const withdrawTrxFromWtrx = async (
+  amount,
+  wtrxContractProxy = getContractsAddress('WtrxContractProxy'),
+  options = {},
+) => {
+  assertAddress(wtrxContractProxy, "WTRX contract address");
+  //function withdraw(uint256 wad) external
+  const functionSelector = "withdraw(uint256)";
+  const parameters = [
+    { type: "uint256", value: toTrxChainAmount(amount) },
+  ];
+  const result = await triggerV2(
+    wtrxContractProxy,
+    functionSelector,
+    parameters,
+    options,
   );
   return result;
 };
@@ -666,6 +780,7 @@ export const getLoanTokenAmountNeed = async (
   decimals,
   publicLiquidatorProxy = getContractsAddress('PublicLiquidatorProxy'),
 ) => {
+  assertAddress(publicLiquidatorProxy, "public liquidator proxy address");
   //function loanTokenAmountNeed(bytes32,uint256,uint256) external view returns (uint256)
   const funcSelector = "loanTokenAmountNeed(bytes32,uint256,uint256)";
   const parameters = [
@@ -700,6 +815,7 @@ export const liquidate = async (
   options = {},
 ) => {
   assertTronAddress(borrower, "borrower address");
+  assertAddress(publicLiquidatorProxy, "public liquidator proxy address");
   //function liquidate(bytes32 marketId,address borrower,uint256 seizedAssets,uint256 repaidShares)
   const functionSelector = "liquidate(bytes32,address,uint256,uint256)";
   const parameters = [
@@ -725,6 +841,7 @@ export const multiClaim = async (
   merkleDistributorAddress = getContractsAddress('MerkleDistributor'),
   options = {},
 ) => {
+  assertAddress(merkleDistributorAddress, "Merkle distributor address");
   //function multiClaim((uint256 merkleIndex,uint256 index,uint256 amount,bytes32[] merkleProof)[])
   //function multiClaim((uint256 merkleIndex,uint256 index,uint256[] amounts,bytes32[] merkleProof)[]) - multi-token (NEW USDD) variant
   const isMultiToken = Array.isArray(claims?.[0]?.amount);
