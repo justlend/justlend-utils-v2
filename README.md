@@ -101,7 +101,52 @@ tronObj.defaultAccount = tronWeb.defaultAddress.base58;
 
 ```
 
-### 2. Contract Interactions
+### 2. Energy direct purchase (explicit API configuration)
+
+Energy direct purchase uses a separately deployed API. The library deliberately does not provide a
+production URL or economic fallbacks: inject the URL, then load limits, durations, prices, and pool
+capacity from the live API.
+
+```javascript
+import { createEnergyPurchaseClient } from 'justlend-v2-utils';
+
+const energy = createEnergyPurchaseClient({
+  baseUrl: process.env.JUSTLEND_ENERGY_API_URL,
+  tronWeb
+});
+
+const config = await energy.getConfig();
+const quote = await energy.quote({
+  receivers: ['TReceiverAddress...'],
+  energyPerReceiver: config.presets[0],
+  config
+});
+
+// Read-only calls are safe to use before the production write endpoint is enabled.
+console.log(quote.amount_sun, await energy.getPoolHealth());
+```
+
+The `purchase()` workflow performs a fresh authoritative quote, builds a native TRX payment,
+requests a wallet signature, submits the signed transaction to the backend, and polls the order.
+It **never broadcasts the payment from the client**. Ambiguous submissions retry only the same
+signed transaction and leave a payment-risk marker that blocks silent creation of another payment.
+Call `reconcilePaymentRisks(payerAddress)` on restart or reconnect; it clears a marker only after
+history recovers the order, or after the chain definitively reports an expired transaction as absent.
+
+```javascript
+const result = await energy.purchase({
+  payerAddress: tronWeb.defaultAddress.base58,
+  receivers: ['TReceiverAddress...'],
+  energyPerReceiver: config.presets[0],
+  duration: config.durations[0],
+  expectedAmountSun: quote.amount_sun,
+  signTransaction: unsigned => tronWeb.trx.sign(unsigned)
+});
+```
+
+Do not log or persist `signed_transaction`: anyone who obtains it may broadcast it before expiry.
+
+### 3. Contract Interactions
 
 **Deposit to Vault**
 
@@ -237,7 +282,7 @@ await multiClaim(
 );
 ```
 
-### 3. Helpers
+### 4. Helpers
 
 ```javascript
 import { formatNumber, toChainAmount } from 'justlend-v2-utils';
