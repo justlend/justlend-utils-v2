@@ -112,7 +112,11 @@ import { createEnergyPurchaseClient } from 'justlend-v2-utils';
 
 const energy = createEnergyPurchaseClient({
   baseUrl: process.env.JUSTLEND_ENERGY_API_URL,
-  tronWeb
+  tronWeb,
+  // Required in Node.js: use a durable store shared by every process.
+  storage: durableRiskStorage,
+  // Required in Node.js: an atomic, non-waiting file/DB lock provider.
+  paymentLock: durablePaymentLock
 });
 
 const config = await energy.getConfig();
@@ -132,6 +136,12 @@ It **never broadcasts the payment from the client**. Ambiguous submissions retry
 signed transaction and leave a payment-risk marker that blocks silent creation of another payment.
 Call `reconcilePaymentRisks(payerAddress)` on restart or reconnect; it clears a marker only after
 history recovers the order, or after the chain definitively reports an expired transaction as absent.
+
+In a browser, the client uses same-origin `localStorage` plus the Web Locks API across tabs. If Web
+Locks is unavailable, pass a cross-context `paymentLock`. In Node.js there is no safe implicit
+fallback: provide durable `storage` (`getItem`/`setItem`/`removeItem`) and a `paymentLock` exposing
+`tryRunExclusive(key, task)`. The lock must be shared by all processes and **fail immediately** when
+already held; it must not queue a duplicate purchase. A single adapter may implement both APIs.
 
 ```javascript
 const result = await energy.purchase({
@@ -167,7 +177,7 @@ const handleDeposit = async () => {
   // 2. Approve if needed
   if (allowance.lt(chainAmount)) {
     console.log("Approving...");
-    await approve(assetAddress, vaultAddress);
+    await approve(assetAddress, vaultAddress, { amount: chainAmount });
   }
 
   // 3. Deposit
@@ -221,7 +231,7 @@ console.log('Loan tokens required:', need.toString());
 const liquidatorAddr = Config.contracts.main.PublicLiquidatorProxy;
 const allowance = await getAllowance(loanTokenAddr, userAddr, liquidatorAddr);
 if (allowance.lt(need)) {
-  await approve(loanTokenAddr, liquidatorAddr);
+  await approve(loanTokenAddr, liquidatorAddr, { amount: need.toFixed(0) });
 }
 
 // 3. Execute the liquidation

@@ -44,10 +44,22 @@ function quote() {
 
 function memoryStorage() {
   const values = new Map();
+  const locks = new Set();
   return {
     getItem: key => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, value),
-    removeItem: key => values.delete(key)
+    removeItem: key => values.delete(key),
+    async tryRunExclusive(key, task) {
+      if (locks.has(key)) {
+        throw new EnergyPurchaseError('PURCHASE_IN_PROGRESS', 'purchase already in progress');
+      }
+      locks.add(key);
+      try {
+        return await task();
+      } finally {
+        locks.delete(key);
+      }
+    }
   };
 }
 
@@ -177,6 +189,7 @@ describe('energy purchase client', () => {
         receivers: [RECEIVER],
         energyPerReceiver: 65000,
         duration: '1h',
+        expectedAmountSun: 2405000,
         signTransaction
       })
     ).rejects.toMatchObject({ code: 'PRICE_MOVED', isBusinessError: true });
@@ -201,5 +214,116 @@ describe('energy purchase client', () => {
     );
 
     await expect(client.reconcilePaymentRisks(PAYER)).resolves.toHaveLength(1);
+  });
+
+  it('fails closed when durable risk storage is unavailable or corrupt', async () => {
+    const { tronWeb, signTransaction } = signingHarness();
+    const withoutStorage = createEnergyPurchaseClient({
+      baseUrl: 'https://energy.example.com',
+      fetch: vi.fn(),
+      tronWeb,
+      storage: null
+    });
+
+    await expect(
+      withoutStorage.purchase({ payerAddress: PAYER, signTransaction })
+    ).rejects.toMatchObject({ code: 'RISK_STORE_UNAVAILABLE' });
+
+    const storage = memoryStorage();
+    storage.setItem(`justlend_energy_purchase_risk:${encodeURIComponent(PAYER)}`, '{bad json');
+    const corrupt = createEnergyPurchaseClient({
+      baseUrl: 'https://energy.example.com',
+      fetch: vi.fn(),
+      tronWeb,
+      storage
+    });
+    expect(() => corrupt.getPaymentRisks(PAYER)).toThrowError(
+      expect.objectContaining({ code: 'RISK_STORE_UNAVAILABLE' })
+    );
+
+    const skippedLock = createEnergyPurchaseClient({
+      baseUrl: 'https://energy.example.com',
+      fetch: vi.fn(),
+      tronWeb,
+      storage: memoryStorage(),
+      paymentLock: { tryRunExclusive: vi.fn(async () => undefined) }
+    });
+    await expect(
+      skippedLock.purchase({ payerAddress: PAYER, signTransaction })
+    ).rejects.toMatchObject({ code: 'PURCHASE_IN_PROGRESS' });
+  });
+
+  it('requires the authoritative quote to equal the confirmed amount', async () => {
+    const { tronWeb, signTransaction } = signingHarness();
+    const fetch = vi.fn(async url => {
+      if (url.endsWith(ENERGY_PURCHASE_PATHS.config)) return envelope(config());
+      if (url.endsWith(ENERGY_PURCHASE_PATHS.quote)) return envelope(quote());
+      throw new Error(`unexpected ${url}`);
+    });
+    const client = createEnergyPurchaseClient({
+      baseUrl: 'https://energy.example.com',
+      fetch,
+      tronWeb,
+      storage: memoryStorage()
+    });
+
+    await expect(
+      client.purchase({
+        payerAddress: PAYER,
+        receivers: [RECEIVER],
+        energyPerReceiver: 65000,
+        duration: '1h',
+        expectedAmountSun: 2404999,
+        signTransaction
+      })
+    ).rejects.toMatchObject({ code: 'AMOUNT_CHANGED' });
+    expect(signTransaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a concurrent purchase before a second signature and persists an intent first', async () => {
+    const { tronWeb } = signingHarness();
+    const storage = memoryStorage();
+    let releaseSigner;
+    const signerGate = new Promise(resolve => { releaseSigner = resolve; });
+    let client;
+    const signTransaction = vi.fn(async transaction => {
+      const intent = client.getPaymentRisk(PAYER);
+      expect(intent).toMatchObject({ state: 'preparing' });
+      expect(intent).not.toHaveProperty('signedTxId');
+      await signerGate;
+      return { ...transaction, signature: ['aa'] };
+    });
+    const fetch = vi.fn(async url => {
+      if (url.endsWith(ENERGY_PURCHASE_PATHS.config)) return envelope(config());
+      if (url.endsWith(ENERGY_PURCHASE_PATHS.quote)) return envelope(quote());
+      if (url.endsWith(ENERGY_PURCHASE_PATHS.buy)) {
+        return envelope({ id: 9, tx_id: 'signed-id', access_token: 'token', state: 'paid' });
+      }
+      if (url.endsWith('/v1/consumer/energy/orders/9')) return envelope({ id: 9, state: 'delivered' });
+      throw new Error(`unexpected ${url}`);
+    });
+    client = createEnergyPurchaseClient({
+      baseUrl: 'https://energy.example.com',
+      fetch,
+      tronWeb,
+      storage,
+      now: () => 1
+    });
+    const input = {
+      payerAddress: PAYER,
+      receivers: [RECEIVER],
+      energyPerReceiver: 65000,
+      duration: '1h',
+      expectedAmountSun: 2405000,
+      signTransaction
+    };
+
+    const first = client.purchase(input);
+    await vi.waitFor(() => expect(signTransaction).toHaveBeenCalledTimes(1));
+    await expect(client.purchase(input)).rejects.toMatchObject({ code: 'PURCHASE_IN_PROGRESS' });
+    releaseSigner();
+    await expect(first).resolves.toMatchObject({ ok: true, orderId: 9 });
+    expect(signTransaction).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls.filter(([url]) => url.endsWith(ENERGY_PURCHASE_PATHS.buy))).toHaveLength(1);
   });
 });

@@ -35,8 +35,11 @@ export const ENERGY_PURCHASE_TERMINAL_STATES = Object.freeze([
 ]);
 
 const PAYMENT_RISK_PREFIX = 'justlend_energy_purchase_risk:';
+const PAYMENT_LOCK_PREFIX = 'justlend_energy_purchase_lock:';
 const DEFAULT_ORDER_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_PAYMENT_RETRY_MS = 2 * 60 * 1000;
+const DEFAULT_PURCHASE_INTENT_TTL_MS = 30 * 60 * 1000;
+const activePayerPurchases = new Set();
 
 export class EnergyPurchaseError extends Error {
   constructor(code, message, options = {}) {
@@ -129,45 +132,177 @@ function defaultStorage() {
   }
 }
 
+function defaultPaymentLock() {
+  try {
+    const locks = globalThis.navigator?.locks;
+    if (typeof locks?.request !== 'function') return null;
+    return {
+      tryRunExclusive: (key, task) =>
+        locks.request(key, { mode: 'exclusive', ifAvailable: true }, lock => {
+          if (!lock) {
+            throw new EnergyPurchaseError(
+              'PURCHASE_IN_PROGRESS',
+              'Another energy purchase is already in progress for this payer.'
+            );
+          }
+          return task();
+        })
+    };
+  } catch {
+    return null;
+  }
+}
+
+function requireRiskStorage(storage) {
+  if (
+    !storage ||
+    typeof storage.getItem !== 'function' ||
+    typeof storage.setItem !== 'function' ||
+    typeof storage.removeItem !== 'function'
+  ) {
+    throw new EnergyPurchaseError(
+      'RISK_STORE_UNAVAILABLE',
+      'Energy purchase requires durable risk storage; provide a storage adapter in Node.js.'
+    );
+  }
+  return storage;
+}
+
+function riskStoreError(message, cause) {
+  return new EnergyPurchaseError('RISK_STORE_UNAVAILABLE', message, { cause });
+}
+
+function assertRiskRecord(risk, payerAddress) {
+  const validIdentity =
+    (typeof risk?.intentId === 'string' && risk.intentId.length > 0) ||
+    (typeof risk?.signedTxId === 'string' && risk.signedTxId.length > 0);
+  if (
+    !risk ||
+    typeof risk !== 'object' ||
+    Array.isArray(risk) ||
+    risk.payerAddress !== payerAddress ||
+    !validIdentity ||
+    !Number.isFinite(risk.createdAt) ||
+    !Number.isFinite(risk.expiresAt) ||
+    typeof risk.paymentConfirmed !== 'boolean' ||
+    (risk.state !== undefined && !['preparing', 'signed'].includes(risk.state))
+  ) {
+    throw riskStoreError('Energy payment risk storage contains an invalid record.');
+  }
+  return risk;
+}
+
+function createIntentId() {
+  try {
+    if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+    if (typeof globalThis.crypto?.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16);
+      globalThis.crypto.getRandomValues(bytes);
+      return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+  } catch {
+    // Fail closed below instead of using Math.random for a payment intent key.
+  }
+  throw new EnergyPurchaseError('CONFIG_MISSING', 'A cryptographically secure random source is required.');
+}
+
 function riskKey(payerAddress) {
   return `${PAYMENT_RISK_PREFIX}${encodeURIComponent(payerAddress)}`;
 }
 
 function readRisks(storage, payerAddress) {
-  if (!storage) return null;
+  requireRiskStorage(storage);
+  let raw;
   try {
-    const value = JSON.parse(storage.getItem(riskKey(payerAddress)) || '[]');
-    const risks = Array.isArray(value) ? value : value ? [value] : [];
-    return risks.filter(risk => risk?.payerAddress === payerAddress);
-  } catch {
-    return [];
+    raw = storage.getItem(riskKey(payerAddress));
+  } catch (cause) {
+    throw riskStoreError('Energy payment risk storage could not be read.', cause);
+  }
+  if (raw === null) return [];
+  try {
+    const value = JSON.parse(raw);
+    const risks = Array.isArray(value) ? value : value && typeof value === 'object' ? [value] : null;
+    if (!risks) throw new Error('expected an array or object');
+    return risks.map(risk => assertRiskRecord(risk, payerAddress));
+  } catch (cause) {
+    if (cause instanceof EnergyPurchaseError) throw cause;
+    throw riskStoreError('Energy payment risk storage is corrupt or has an invalid schema.', cause);
   }
 }
 
 function writeRisk(storage, risk) {
-  if (storage) {
-    const risks = readRisks(storage, risk.payerAddress) || [];
-    const next = risks.filter(item => item.signedTxId !== risk.signedTxId);
-    next.push(risk);
+  requireRiskStorage(storage);
+  assertRiskRecord(risk, risk.payerAddress);
+  const risks = readRisks(storage, risk.payerAddress);
+  const sameRisk = item =>
+    (risk.intentId && item.intentId === risk.intentId) ||
+    (risk.signedTxId && item.signedTxId === risk.signedTxId);
+  const next = risks.filter(item => !sameRisk(item));
+  next.push(risk);
+  try {
     storage.setItem(riskKey(risk.payerAddress), JSON.stringify(next));
+  } catch (cause) {
+    throw riskStoreError('Energy payment risk storage could not be written.', cause);
   }
   return risk;
 }
 
-function clearRisk(storage, payerAddress, signedTxId) {
-  if (!storage) return;
-  if (!signedTxId) {
-    storage.removeItem(riskKey(payerAddress));
-    return;
+function clearRisk(storage, payerAddress, riskId) {
+  requireRiskStorage(storage);
+  try {
+    if (!riskId) {
+      storage.removeItem(riskKey(payerAddress));
+      return;
+    }
+    const remaining = readRisks(storage, payerAddress).filter(
+      risk => risk.signedTxId !== riskId && risk.intentId !== riskId
+    );
+    if (remaining.length) storage.setItem(riskKey(payerAddress), JSON.stringify(remaining));
+    else storage.removeItem(riskKey(payerAddress));
+  } catch (cause) {
+    if (cause instanceof EnergyPurchaseError) throw cause;
+    throw riskStoreError('Energy payment risk storage could not be updated.', cause);
   }
-  const remaining = (readRisks(storage, payerAddress) || []).filter(risk => risk.signedTxId !== signedTxId);
-  if (remaining.length) storage.setItem(riskKey(payerAddress), JSON.stringify(remaining));
-  else storage.removeItem(riskKey(payerAddress));
 }
 
 function readRisk(storage, payerAddress) {
-  const risks = readRisks(storage, payerAddress) || [];
+  const risks = readRisks(storage, payerAddress);
   return risks.find(risk => risk.paymentConfirmed === true) || risks[0] || null;
+}
+
+async function withPayerPurchaseLock(payerAddress, paymentLock, task) {
+  if (activePayerPurchases.has(payerAddress)) {
+    throw new EnergyPurchaseError(
+      'PURCHASE_IN_PROGRESS',
+      'Another energy purchase is already in progress for this payer.'
+    );
+  }
+  if (!paymentLock || typeof paymentLock.tryRunExclusive !== 'function') {
+    throw new EnergyPurchaseError(
+      'PAYMENT_LOCK_UNAVAILABLE',
+      'Energy purchase requires a non-waiting cross-context payment lock. Use Web Locks or provide paymentLock.tryRunExclusive().'
+    );
+  }
+  activePayerPurchases.add(payerAddress);
+  try {
+    let entered = false;
+    const result = await paymentLock.tryRunExclusive(`${PAYMENT_LOCK_PREFIX}${payerAddress}`, async () => {
+      entered = true;
+      return task();
+    });
+    if (!entered) {
+      throw new EnergyPurchaseError(
+        'PURCHASE_IN_PROGRESS',
+        'Another energy purchase is already in progress for this payer.'
+      );
+    }
+    return result;
+  } catch (cause) {
+    if (cause instanceof EnergyPurchaseError) throw cause;
+    throw new EnergyPurchaseError('PAYMENT_LOCK_FAILED', 'The payer payment lock failed.', { cause });
+  } finally {
+    activePayerPurchases.delete(payerAddress);
+  }
 }
 
 function normalizeSignedTransaction(signedTransaction) {
@@ -217,13 +352,14 @@ export function createEnergyPurchaseClient(options = {}) {
   }
   const tronWeb = options.tronWeb;
   const storage = options.storage === undefined ? defaultStorage() : options.storage;
+  const paymentLock = options.paymentLock ||
+    (typeof storage?.tryRunExclusive === 'function' ? storage : defaultPaymentLock());
   const requestTimeoutMs = options.requestTimeoutMs ?? 8000;
   const paymentRetryIntervalMs = options.paymentRetryIntervalMs ?? 5000;
   const paymentRetryTimeoutMs = options.paymentRetryTimeoutMs ?? DEFAULT_PAYMENT_RETRY_MS;
   const orderPollIntervalMs = options.orderPollIntervalMs ?? 3000;
   const orderPollTimeoutMs = options.orderPollTimeoutMs ?? 150000;
   const orderTtlMs = options.orderTtlMs ?? DEFAULT_ORDER_TTL_MS;
-  const amountGuardEpsilonSun = options.amountGuardEpsilonSun ?? 1000;
   const sleep = options.sleep || sleepDefault;
   const now = options.now || Date.now;
 
@@ -369,11 +505,15 @@ export function createEnergyPurchaseClient(options = {}) {
     }
   }
 
-  async function reconcilePaymentRisks(payerAddress) {
+  async function reconcilePaymentRisksUnlocked(payerAddress) {
     validateAddress(payerAddress, 'payerAddress');
-    const risks = readRisks(storage, payerAddress) || [];
+    const risks = readRisks(storage, payerAddress);
     let history = null;
     for (const risk of risks) {
+      if (!risk.signedTxId) {
+        if (now() >= risk.expiresAt) clearRisk(storage, payerAddress, risk.intentId);
+        continue;
+      }
       const lookup = await lookupTransaction(risk.signedTxId);
       if (lookup === 'found') {
         risk.paymentConfirmed = true;
@@ -393,7 +533,7 @@ export function createEnergyPurchaseClient(options = {}) {
         clearRisk(storage, payerAddress, risk.signedTxId);
       }
     }
-    return readRisks(storage, payerAddress) || [];
+    return readRisks(storage, payerAddress);
   }
 
   async function pollOrder(orderId, pollOptions = {}) {
@@ -415,9 +555,9 @@ export function createEnergyPurchaseClient(options = {}) {
     return detail;
   }
 
-  async function purchase(input) {
+  async function purchaseLocked(input) {
     validateAddress(input.payerAddress, 'payerAddress');
-    const reconciledRisks = await reconcilePaymentRisks(input.payerAddress);
+    const reconciledRisks = await reconcilePaymentRisksUnlocked(input.payerAddress);
     const previousRisk = reconciledRisks.find(risk => risk.paymentConfirmed === true) || reconciledRisks[0] || null;
     if (previousRisk && input.acknowledgePreviousPaymentRisk !== true) {
       throw new EnergyPurchaseError(
@@ -439,32 +579,55 @@ export function createEnergyPurchaseClient(options = {}) {
       );
     }
     const authoritativeQuote = await quote({ ...input, config }, { signal: input.signal });
-    if (
-      input.expectedAmountSun !== undefined &&
-      Number(authoritativeQuote.amount_sun) > Number(input.expectedAmountSun) + amountGuardEpsilonSun
-    ) {
-      throw new EnergyPurchaseError('AMOUNT_CHANGED', 'The authoritative quote exceeds the confirmed amount.', {
+    if (input.expectedAmountSun === undefined) {
+      throw new EnergyPurchaseError(
+        'CONFIRMATION_REQUIRED',
+        'expectedAmountSun is required and must match the authoritative quote exactly.'
+      );
+    }
+    validatePositiveInteger(Number(input.expectedAmountSun), 'expectedAmountSun');
+    if (Number(authoritativeQuote.amount_sun) !== Number(input.expectedAmountSun)) {
+      throw new EnergyPurchaseError('AMOUNT_CHANGED', 'The authoritative quote differs from the confirmed amount.', {
         details: { amountSun: authoritativeQuote.amount_sun, expectedAmountSun: input.expectedAmountSun }
       });
     }
 
-    input.onState?.('signing');
-    const signed = await buildAndSignPayment({
+    // Persist an intent before asking the wallet to sign. A crash or tab/process
+    // exit can therefore never turn an in-flight signing decision back into
+    // "no payment risk" on restart.
+    const intent = {
       payerAddress: input.payerAddress,
-      payAddress: authoritativeQuote.pay_address,
-      amountSun: Number(authoritativeQuote.amount_sun),
-      signTransaction: input.signTransaction
-    });
+      intentId: createIntentId(),
+      state: 'preparing',
+      createdAt: now(),
+      expiresAt: now() + DEFAULT_PURCHASE_INTENT_TTL_MS,
+      paymentConfirmed: false
+    };
+    writeRisk(storage, intent);
+
+    input.onState?.('signing');
+    let signed;
+    try {
+      signed = await buildAndSignPayment({
+        payerAddress: input.payerAddress,
+        payAddress: authoritativeQuote.pay_address,
+        amountSun: Number(authoritativeQuote.amount_sun),
+        signTransaction: input.signTransaction
+      });
+    } catch (error) {
+      clearRisk(storage, input.payerAddress, intent.intentId);
+      throw error;
+    }
     const signedExpiration = Number(signed.raw_data?.expiration);
     const signedDeadline = Number.isFinite(signedExpiration) ? signedExpiration : now() + orderTtlMs;
     const retryDeadline = Math.min(signedDeadline, now() + paymentRetryTimeoutMs);
     const risk = {
-      payerAddress: input.payerAddress,
+      ...intent,
       signedTxId: signed.txID,
-      createdAt: now(),
+      state: 'signed',
       expiresAt: signedDeadline,
-      paymentConfirmed: false
     };
+    writeRisk(storage, risk);
 
     input.onState?.('submitting');
     let order;
@@ -517,7 +680,6 @@ export function createEnergyPurchaseClient(options = {}) {
     }
 
     clearRisk(storage, input.payerAddress, signed.txID);
-    if (previousRisk) clearRisk(storage, input.payerAddress, previousRisk.signedTxId);
     const orderId = order.id;
     const txHash = order.tx_id || signed.txID;
     input.onOrderAccepted?.({ orderId, txHash, state: order.state || 'pending' });
@@ -536,6 +698,24 @@ export function createEnergyPurchaseClient(options = {}) {
     return { ok: true, orderId, txHash, state, detail };
   }
 
+  async function purchase(input) {
+    validateAddress(input?.payerAddress, 'payerAddress');
+    requireRiskStorage(storage);
+    return withPayerPurchaseLock(input.payerAddress, paymentLock, () => purchaseLocked(input));
+  }
+
+  async function reconcilePaymentRisks(payerAddress) {
+    validateAddress(payerAddress, 'payerAddress');
+    requireRiskStorage(storage);
+    return withPayerPurchaseLock(payerAddress, paymentLock, () => reconcilePaymentRisksUnlocked(payerAddress));
+  }
+
+  async function clearPaymentRisk(payerAddress, riskId) {
+    validateAddress(payerAddress, 'payerAddress');
+    requireRiskStorage(storage);
+    return withPayerPurchaseLock(payerAddress, paymentLock, () => clearRisk(storage, payerAddress, riskId));
+  }
+
   return Object.freeze({
     baseUrl,
     getConfig,
@@ -547,9 +727,15 @@ export function createEnergyPurchaseClient(options = {}) {
     buildAndSignPayment,
     pollOrder,
     purchase,
-    getPaymentRisk: payerAddress => readRisk(storage, payerAddress),
-    getPaymentRisks: payerAddress => readRisks(storage, payerAddress) || [],
+    getPaymentRisk: payerAddress => {
+      validateAddress(payerAddress, 'payerAddress');
+      return readRisk(storage, payerAddress);
+    },
+    getPaymentRisks: payerAddress => {
+      validateAddress(payerAddress, 'payerAddress');
+      return readRisks(storage, payerAddress);
+    },
     reconcilePaymentRisks,
-    clearPaymentRisk: (payerAddress, signedTxId) => clearRisk(storage, payerAddress, signedTxId)
+    clearPaymentRisk
   });
 }

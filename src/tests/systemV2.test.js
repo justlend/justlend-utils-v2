@@ -528,6 +528,27 @@ describe('justlend v2 utils systemV2', () => {
     );
   });
 
+  it('repayWithTrx rejects an invalid raw-SUN shares call value before transaction construction', async () => {
+    const marketParams = {
+      borrowAddress: "TYsbWxNnyTgsZaTFaue9hqpxkU3Fkco94a",
+      collateralAddress: "TZ8du1HkatTWDbS6FLZei4dQfjfpSm9mxp",
+      oracle: "TFYLvDFSEW6dKSnWb3mt76hkHAgxPktrnG",
+      irm: "TQYeFiTVNfJ6jfqjyfL2s93VLG1huaMEzC",
+      lltv: "0.9"
+    };
+
+    await expect(
+      repayWithTrx(
+        marketParams,
+        0,
+        "50000000000000000",
+        'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3',
+        "-1"
+      )
+    ).rejects.toThrow(/invalid amount/);
+    expect(blockchain.triggerV2).not.toHaveBeenCalled();
+  });
+
   it('withdrawTrxCollateral', async () => {
     const marketParams = {
       borrowAddress: "TPYwAC9Y4uUcT2QH3WPPjqxzJSJWymMoMS",

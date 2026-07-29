@@ -508,7 +508,12 @@ export const repayWithTrx = async (
   } = marketParams;
   const assets = toTrxChainAmount(amount);
   let callValue = assets;
-  if (sharesCallValueAmount) callValue = sharesCallValueAmount;
+  if (sharesCallValueAmount != null) {
+    // `sharesCallValueAmount` is already expressed in SUN, but it is still a
+    // uint256 transaction value. Route it through the same non-negative,
+    // finite-integer boundary used by every other raw chain amount.
+    callValue = toChainAmount(sharesCallValueAmount, 0);
+  }
 
   const parameters = [
     {
