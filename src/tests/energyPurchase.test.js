@@ -240,6 +240,22 @@ describe('energy purchase client', () => {
     expect(() => corrupt.getPaymentRisks(PAYER)).toThrowError(
       expect.objectContaining({ code: 'RISK_STORE_UNAVAILABLE' })
     );
+    const invalidRecords = [
+      { payerAddress: PAYER, intentId: 'i', state: 'preparing', createdAt: -1, expiresAt: 2, paymentConfirmed: false },
+      { payerAddress: PAYER, intentId: 'i', state: 'preparing', createdAt: 1.5, expiresAt: 2, paymentConfirmed: false },
+      { payerAddress: PAYER, intentId: 'i', state: 'preparing', createdAt: 3, expiresAt: 2, paymentConfirmed: false },
+      { payerAddress: PAYER, intentId: 'i', state: 'signed', createdAt: 1, expiresAt: 2, paymentConfirmed: false },
+      { payerAddress: PAYER, intentId: 'i', signedTxId: 'tx', state: 'preparing', createdAt: 1, expiresAt: 2, paymentConfirmed: false }
+    ];
+    for (const invalid of invalidRecords) {
+      storage.setItem(
+        `justlend_energy_purchase_risk:${encodeURIComponent(PAYER)}`,
+        JSON.stringify([invalid])
+      );
+      expect(() => corrupt.getPaymentRisks(PAYER)).toThrowError(
+        expect.objectContaining({ code: 'RISK_STORE_UNAVAILABLE' })
+      );
+    }
 
     const skippedLock = createEnergyPurchaseClient({
       baseUrl: 'https://energy.example.com',
@@ -320,6 +336,20 @@ describe('energy purchase client', () => {
 
     const first = client.purchase(input);
     await vi.waitFor(() => expect(signTransaction).toHaveBeenCalledTimes(1));
+    const secondClient = createEnergyPurchaseClient({
+      baseUrl: 'https://energy.example.com',
+      fetch,
+      tronWeb,
+      storage,
+      now: () => 1
+    });
+    await expect(secondClient.reconcilePaymentRisks(PAYER)).rejects.toMatchObject({
+      code: 'PURCHASE_IN_PROGRESS'
+    });
+    await expect(secondClient.clearPaymentRisk(PAYER)).rejects.toMatchObject({
+      code: 'PURCHASE_IN_PROGRESS'
+    });
+    expect(client.getPaymentRisk(PAYER)).toMatchObject({ state: 'preparing' });
     await expect(client.purchase(input)).rejects.toMatchObject({ code: 'PURCHASE_IN_PROGRESS' });
     releaseSigner();
     await expect(first).resolves.toMatchObject({ ok: true, orderId: 9 });

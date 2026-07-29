@@ -141,7 +141,8 @@ In a browser, the client uses same-origin `localStorage` plus the Web Locks API 
 Locks is unavailable, pass a cross-context `paymentLock`. In Node.js there is no safe implicit
 fallback: provide durable `storage` (`getItem`/`setItem`/`removeItem`) and a `paymentLock` exposing
 `tryRunExclusive(key, task)`. The lock must be shared by all processes and **fail immediately** when
-already held; it must not queue a duplicate purchase. A single adapter may implement both APIs.
+already held; it must not queue a duplicate purchase. Storage methods are synchronous: `setItem`
+must not return until the record is durably committed. A single adapter may implement both APIs.
 
 ```javascript
 const result = await energy.purchase({
@@ -207,8 +208,8 @@ const tx = await supplyCollateral(
   marketParams,
   "50", // amount
   18,   // decimals
-  "TMoolahContractAddress...", // JustLend Moolah contract
-  "TUserAddress..."    // User address
+  "TUserAddress...",          // onBehalf
+  "TMoolahContractAddress..." // optional JustLend Moolah proxy override
 );
 
 ```
@@ -220,6 +221,8 @@ import { getLoanTokenAmountNeed, liquidate, approve, getAllowance, Config } from
 
 const marketId = '0x...'; // bytes32 — fetched from Moolah `getId(marketParams)`
 const borrower = 'TBorrowerAddress...';
+const loanTokenAddr = 'TLoanTokenAddress...';
+const userAddr = 'TYourAddress...';
 const seizedAssets = '50';   // collateral to seize (human-readable)
 const decimals = 18;
 

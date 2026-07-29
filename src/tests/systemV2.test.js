@@ -528,7 +528,7 @@ describe('justlend v2 utils systemV2', () => {
     );
   });
 
-  it('repayWithTrx rejects an invalid raw-SUN shares call value before transaction construction', async () => {
+  it('repayWithTrx validates raw-SUN shares call value and prevents options from overriding it', async () => {
     const marketParams = {
       borrowAddress: "TYsbWxNnyTgsZaTFaue9hqpxkU3Fkco94a",
       collateralAddress: "TZ8du1HkatTWDbS6FLZei4dQfjfpSm9mxp",
@@ -537,16 +537,34 @@ describe('justlend v2 utils systemV2', () => {
       lltv: "0.9"
     };
 
-    await expect(
-      repayWithTrx(
-        marketParams,
-        0,
-        "50000000000000000",
-        'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3',
-        "-1"
-      )
-    ).rejects.toThrow(/invalid amount/);
+    for (const invalid of ["-1", "1.5"]) {
+      await expect(
+        repayWithTrx(
+          marketParams,
+          0,
+          "50000000000000000",
+          'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3',
+          invalid
+        )
+      ).rejects.toThrow(/invalid sharesCallValueAmount/);
+    }
     expect(blockchain.triggerV2).not.toHaveBeenCalled();
+
+    await repayWithTrx(
+      marketParams,
+      0,
+      "50000000000000000",
+      'TKGRE6oiU3rEzasue4MsB6sCXXSTx9BAe3',
+      "42",
+      undefined,
+      { callValue: "-1", feeLimit: 7 }
+    );
+    expect(blockchain.triggerV2).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(Array),
+      { callValue: "42", feeLimit: 7 }
+    );
   });
 
   it('withdrawTrxCollateral', async () => {

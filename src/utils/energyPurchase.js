@@ -173,17 +173,25 @@ function riskStoreError(message, cause) {
 }
 
 function assertRiskRecord(risk, payerAddress) {
-  const validIdentity =
-    (typeof risk?.intentId === 'string' && risk.intentId.length > 0) ||
-    (typeof risk?.signedTxId === 'string' && risk.signedTxId.length > 0);
+  const hasIntentId = typeof risk?.intentId === 'string' && risk.intentId.length > 0;
+  const hasSignedTxId = typeof risk?.signedTxId === 'string' && risk.signedTxId.length > 0;
+  const validStateIdentity =
+    (risk?.state === 'preparing' && hasIntentId && !hasSignedTxId) ||
+    (risk?.state === 'signed' && hasIntentId && hasSignedTxId) ||
+    // Backward compatibility for risk records written before intents existed.
+    (risk?.state === undefined && !hasIntentId && hasSignedTxId);
+  const validTimes =
+    Number.isSafeInteger(risk?.createdAt) &&
+    risk.createdAt >= 0 &&
+    Number.isSafeInteger(risk?.expiresAt) &&
+    risk.expiresAt >= risk.createdAt;
   if (
     !risk ||
     typeof risk !== 'object' ||
     Array.isArray(risk) ||
     risk.payerAddress !== payerAddress ||
-    !validIdentity ||
-    !Number.isFinite(risk.createdAt) ||
-    !Number.isFinite(risk.expiresAt) ||
+    !validStateIdentity ||
+    !validTimes ||
     typeof risk.paymentConfirmed !== 'boolean' ||
     (risk.state !== undefined && !['preparing', 'signed'].includes(risk.state))
   ) {

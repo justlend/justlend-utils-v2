@@ -512,7 +512,11 @@ export const repayWithTrx = async (
     // `sharesCallValueAmount` is already expressed in SUN, but it is still a
     // uint256 transaction value. Route it through the same non-negative,
     // finite-integer boundary used by every other raw chain amount.
-    callValue = toChainAmount(sharesCallValueAmount, 0);
+    const rawCallValue = new BigNumber(sharesCallValueAmount);
+    if (!rawCallValue.isFinite() || !rawCallValue.isInteger() || rawCallValue.lt(0)) {
+      throw new Error(`repayWithTrx: invalid sharesCallValueAmount ${sharesCallValueAmount}`);
+    }
+    callValue = toChainAmount(rawCallValue, 0);
   }
 
   const parameters = [
@@ -536,7 +540,9 @@ export const repayWithTrx = async (
     trxProviderProxy,
     functionSelector,
     parameters,
-    {callValue, ...options},
+    // The validated value is authoritative; callers cannot replace it through
+    // options.callValue after the uint256 boundary guard.
+    {...options, callValue},
   );
   return result;
 };
