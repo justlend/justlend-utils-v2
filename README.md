@@ -101,7 +101,63 @@ tronObj.defaultAccount = tronWeb.defaultAddress.base58;
 
 ```
 
-### 2. Contract Interactions
+### 2. Energy direct purchase (explicit API configuration)
+
+Energy direct purchase uses a separately deployed API. The library deliberately does not provide a
+production URL or economic fallbacks: inject the URL, then load limits, durations, prices, and pool
+capacity from the live API.
+
+```javascript
+import { createEnergyPurchaseClient } from 'justlend-v2-utils';
+
+const energy = createEnergyPurchaseClient({
+  baseUrl: process.env.JUSTLEND_ENERGY_API_URL,
+  tronWeb,
+  // Required in Node.js: use a durable store shared by every process.
+  storage: durableRiskStorage,
+  // Required in Node.js: an atomic, non-waiting file/DB lock provider.
+  paymentLock: durablePaymentLock
+});
+
+const config = await energy.getConfig();
+const quote = await energy.quote({
+  receivers: ['TReceiverAddress...'],
+  energyPerReceiver: config.presets[0],
+  config
+});
+
+// Read-only calls are safe to use before the production write endpoint is enabled.
+console.log(quote.amount_sun, await energy.getPoolHealth());
+```
+
+The `purchase()` workflow performs a fresh authoritative quote, builds a native TRX payment,
+requests a wallet signature, submits the signed transaction to the backend, and polls the order.
+It **never broadcasts the payment from the client**. Ambiguous submissions retry only the same
+signed transaction and leave a payment-risk marker that blocks silent creation of another payment.
+Call `reconcilePaymentRisks(payerAddress)` on restart or reconnect; it clears a marker only after
+history recovers the order, or after the chain definitively reports an expired transaction as absent.
+
+In a browser, the client uses same-origin `localStorage` plus the Web Locks API across tabs. If Web
+Locks is unavailable, pass a cross-context `paymentLock`. In Node.js there is no safe implicit
+fallback: provide durable `storage` (`getItem`/`setItem`/`removeItem`) and a `paymentLock` exposing
+`tryRunExclusive(key, task)`. The lock must be shared by all processes and **fail immediately** when
+already held; it must not queue a duplicate purchase. Storage methods are synchronous: `setItem`
+must not return until the record is durably committed. A single adapter may implement both APIs.
+
+```javascript
+const result = await energy.purchase({
+  payerAddress: tronWeb.defaultAddress.base58,
+  receivers: ['TReceiverAddress...'],
+  energyPerReceiver: config.presets[0],
+  duration: config.durations[0],
+  expectedAmountSun: quote.amount_sun,
+  signTransaction: unsigned => tronWeb.trx.sign(unsigned)
+});
+```
+
+Do not log or persist `signed_transaction`: anyone who obtains it may broadcast it before expiry.
+
+### 3. Contract Interactions
 
 **Deposit to Vault**
 
@@ -122,7 +178,7 @@ const handleDeposit = async () => {
   // 2. Approve if needed
   if (allowance.lt(chainAmount)) {
     console.log("Approving...");
-    await approve(assetAddress, vaultAddress);
+    await approve(assetAddress, vaultAddress, { amount: chainAmount });
   }
 
   // 3. Deposit
@@ -152,8 +208,8 @@ const tx = await supplyCollateral(
   marketParams,
   "50", // amount
   18,   // decimals
-  "TMoolahContractAddress...", // JustLend Moolah contract
-  "TUserAddress..."    // User address
+  "TUserAddress...",          // onBehalf
+  "TMoolahContractAddress..." // optional JustLend Moolah proxy override
 );
 
 ```
@@ -165,6 +221,8 @@ import { getLoanTokenAmountNeed, liquidate, approve, getAllowance, Config } from
 
 const marketId = '0x...'; // bytes32 — fetched from Moolah `getId(marketParams)`
 const borrower = 'TBorrowerAddress...';
+const loanTokenAddr = 'TLoanTokenAddress...';
+const userAddr = 'TYourAddress...';
 const seizedAssets = '50';   // collateral to seize (human-readable)
 const decimals = 18;
 
@@ -176,7 +234,7 @@ console.log('Loan tokens required:', need.toString());
 const liquidatorAddr = Config.contracts.main.PublicLiquidatorProxy;
 const allowance = await getAllowance(loanTokenAddr, userAddr, liquidatorAddr);
 if (allowance.lt(need)) {
-  await approve(loanTokenAddr, liquidatorAddr);
+  await approve(loanTokenAddr, liquidatorAddr, { amount: need.toFixed(0) });
 }
 
 // 3. Execute the liquidation
@@ -237,7 +295,7 @@ await multiClaim(
 );
 ```
 
-### 3. Helpers
+### 4. Helpers
 
 ```javascript
 import { formatNumber, toChainAmount } from 'justlend-v2-utils';
