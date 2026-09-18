@@ -17,6 +17,7 @@ const TRUSTED_TRONGRID_HOSTS = new Set([
   'api.trongrid.io',
   'api.tronstack.io',
   'nile.trongrid.io',
+  'api.nileex.io',
   'api.shasta.trongrid.io',
   'shasta.trongrid.io',
 ]);
@@ -67,17 +68,22 @@ const Config = {
   ],
   contracts: {
    main:{
-     MoolahProxy: 'TRpY4gn6hHxA8x6oMtb3v3A37edkmaeY8j',
-     TrxProviderProxy: 'TGBHLgstjZQCRVNx3UZTD3UaQaWYxa4nM6',
+     MoolahProxy: 'TDH4dhmVQQNc1ZNudJwWzBcs2h6ahhWrpp',
+     TrxProviderProxy: 'TMDENHFSiRzmJNSEBAFmrDbLkQ672iPN8H',
+     // Legacy/general single-token distributors (uint256 amount).
      MerkleDistributor: 'TQoiXqruw4SqYPwHAd6QiNZ3ES4rLsejAj',
      MerkleDistributorNEWUSDD: 'TYxJzmeDyxuxFbaGywjivfkft75qLeS485',
+     // Separate multi-token deployments (uint256[] amounts); proofs are not interchangeable.
+     MultiMerkleDistributor: 'TUsyCPRyQdMsn9WnJcssBFXtzg6bUVbty6',
+     MerkleDistributorV2: 'TRiE1tGxBitNAMUazZ6Kk7GA36hpPdzUSL',
      PublicLiquidatorProxy: 'TGDuQaHtvadVL5z9PMM874CaehQnwf3qJi',
      WtrxContractProxy: 'TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR',
    },
    nile:{
      MoolahProxy: 'TFgrgsd8c37ByaZx1YxpBzazJS8bHsoP5c',
      TrxProviderProxy: 'TMRZwenUVHPvnxhwDDQLY4SEmmwXvtKRjz',
-     MerkleDistributor: 'TKQ5VVJPsoZDD7NqQ8ffhFwzeRp45XLSGt',
+     // No verified default single-token distributor on Nile. Reward helpers
+     // fail closed unless the caller supplies a verified deployment explicitly.
      PublicLiquidatorProxy: 'TLvPrXHVQCA54gLQjLfoNi5XQ6WqhXCEps',
      WtrxContractProxy: 'TYsbWxNnyTgsZaTFaue9hqpxkU3Fkco94a',
    }

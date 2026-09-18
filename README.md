@@ -39,7 +39,7 @@ The project includes core blockchain tool wrappers, helper functions, and a Reac
     * Repaying (`repay`).
 * **Native TRX Support**: Provides specialized proxy methods for handling native TRX interactions, including `depositTrxToVault`, `borrowTrx`, `depositTrxToWtrx` for TRX → WTRX wrapping, and `withdrawTrxFromWtrx` for WTRX → TRX unwrapping.
 * **Liquidation**: Public-liquidator entry points — preview the loan-token amount required (`getLoanTokenAmountNeed`) and execute the seizure (`liquidate`).
-* **V2 Mining Rewards**: Merkle-based reward distribution — query Merkle root readiness (`getMerkleRoot`), check per-user claim status (`isClaimed`), and batch-claim across rounds (`multiClaim`, with single-token and multi-token / NEW USDD variants).
+* **Reward Claim Helpers**: Query Merkle root readiness (`getMerkleRoot`), check per-user claim status (`isClaimed`), and batch-claim across rounds (`multiClaim`). Legacy/NEW USDD rewards use single-token amounts; general multi-token and SBM V2 rewards require their respective distributors and array amounts.
 * **Energy Estimation**: Includes tools for estimating transaction energy consumption (`estimateSupplyTrxGas`).
 * **Data Formatting**: Built-in `BigNumber` handling and amount formatting utilities.
 * **Wallet Adapter**: Integrated with `@tronweb3` wallet adapters, supporting TronLink.
@@ -173,6 +173,15 @@ read when the payer is supplied dynamically) after upgrading.
 
 ### 3. Contract Interactions
 
+Mainnet lending helpers default to the current V2 `MoolahProxy`
+(`TDH4dhmVQQNc1ZNudJwWzBcs2h6ahhWrpp`) and `TrxProviderProxy`
+(`TMDENHFSiRzmJNSEBAFmrDbLkQ672iPN8H`). Nile lending defaults are unchanged.
+Updating these defaults does **not** migrate positions or token allowances from
+legacy deployments. Integrations managing legacy positions must keep passing the
+corresponding legacy proxy explicitly; integrations using the current deployment
+must check allowances against the actual spender. No approval or migration is
+performed automatically.
+
 **Deposit to Vault**
 
 ```javascript
@@ -201,6 +210,28 @@ const handleDeposit = async () => {
 };
 
 ```
+
+**Asset amounts versus raw shares**
+
+`repay`, `redeemFromVault`, `redeemTrxFromVault`, `getLoanTokenAmountNeed`, and
+`liquidate` accept either a human-readable asset amount or a raw share count.
+Omitted/null shares and numeric, string, bigint, or BigNumber zero all select
+asset mode. Positive shares select share mode: pass zero or null for the asset
+amount instead of specifying both. Invalid, negative, fractional, unsafe-number,
+or overflowing uint256 share counts are rejected before any chain call. Use an
+integer string for large share counts; shares are never decimal-scaled by the SDK.
+
+For `redeemTrxFromVault(vault, assets, legacyDecimals, shares, receiver, owner, ...)`,
+the third argument is deprecated and ignored, but its position is retained for
+compatibility. Asset withdrawals always convert human TRX to SUN at **6 decimals**,
+even if the vault's share token uses 18 decimals. Pass `undefined` in that slot in
+new code. In share mode, pass the raw share integer without rescaling it.
+
+`repayWithTrx` uses the same numeric zero/share validation. Its `amount` has an
+additional role in share mode: it remains the human-TRX funding budget for
+`callValue`, not a second repayment selector. An explicit `sharesCallValueAmount`
+is already in SUN and takes precedence as the funding budget; the share count
+must not be used as the TRX payment amount.
 
 **Supply Collateral**
 
@@ -231,7 +262,7 @@ const tx = await supplyCollateral(
 **Liquidate an Unhealthy Position**
 
 ```javascript
-import { getLoanTokenAmountNeed, liquidate, approve, getAllowance, Config } from 'justlend-v2-utils';
+import { getLoanTokenAmountNeed, liquidate, approve, getAllowance, getContractsAddress } from 'justlend-v2-utils';
 
 const marketId = '0x...'; // bytes32 — fetched from Moolah `getId(marketParams)`
 const borrower = 'TBorrowerAddress...';
@@ -239,24 +270,25 @@ const loanTokenAddr = 'TLoanTokenAddress...';
 const userAddr = 'TYourAddress...';
 const seizedAssets = '50';   // collateral to seize (human-readable)
 const decimals = 18;
+// Resolve once for the active network. Use this same target for the whole flow.
+const liquidatorAddr = getContractsAddress('PublicLiquidatorProxy');
 
 // 1. Preview how many loan tokens you need to repay
-const need = await getLoanTokenAmountNeed(marketId, seizedAssets, null, decimals);
+const need = await getLoanTokenAmountNeed(marketId, seizedAssets, null, decimals, liquidatorAddr);
 console.log('Loan tokens required:', need.toString());
 
 // 2. Approve the PublicLiquidator on the loan token if needed
-const liquidatorAddr = Config.contracts.main.PublicLiquidatorProxy;
 const allowance = await getAllowance(loanTokenAddr, userAddr, liquidatorAddr);
 if (allowance.lt(need)) {
   await approve(loanTokenAddr, liquidatorAddr, { amount: need.toFixed(0) });
 }
 
 // 3. Execute the liquidation
-const tx = await liquidate(marketId, borrower, seizedAssets, null, decimals);
+const tx = await liquidate(marketId, borrower, seizedAssets, null, decimals, liquidatorAddr);
 console.log('TxID:', tx.transaction.txID);
 
 // Alternatively, liquidate by repaidShares — pass shares as the 4th arg, set seizedAssets to 0:
-// await liquidate(marketId, borrower, 0, '500000000', 6);
+// await liquidate(marketId, borrower, 0, '500000000', 6, liquidatorAddr);
 ```
 
 **Wrap TRX ↔ WTRX**
@@ -273,41 +305,62 @@ await withdrawTrxFromWtrx(100);
 
 **Claim V2 Mining Rewards**
 
+Reward deployments have different ABIs and independent Merkle roots:
+
+| Registry key | Purpose | `claim.amount` |
+| --- | --- | --- |
+| `MerkleDistributor` | Legacy/general single-token rewards; existing helper default | Scalar raw amount |
+| `MerkleDistributorNEWUSDD` | Single-token USDD rewards; **not** a multi-token distributor | Scalar raw amount |
+| `MultiMerkleDistributor` | General multi-token rewards | Array of raw amounts |
+| `MerkleDistributorV2` | SBM V2 mining rewards | Array of raw amounts |
+
+For V2 mining, explicitly select `MerkleDistributorV2` for **both reads and the
+claim**. Supply periods/proofs from the backend for that exact distributor and
+account. Each period has `{ merkleIndex, index, amount, merkleProof }`, where
+`amount` is an array of integer strings in token base units. Preserve the backend's
+token order and **all zero slots**, even when only one token has a non-zero reward.
+These entries describe contract capabilities, not whether a mining campaign is
+active. Claim only when the relevant campaign has published claimable rewards.
+Multi-token ABI support does not imply that every token currently earns rewards.
+
 ```javascript
-import { getMerkleRoot, isClaimed, multiClaim, Config } from 'justlend-v2-utils';
+import { getContractsAddress, getMerkleRoot, isClaimed, multiClaim } from 'justlend-v2-utils';
 
-// Round/proof data is supplied by the JustLend backend
-const periods = [
-  {
-    merkleIndex: '12',
-    index: '345',
-    amount: '1000000',          // single-token: a string
-    merkleProof: ['0xabc...', '0xdef...'],
-  },
-];
+// `periods` must contain V2 proofs and array-valued amounts for the sender.
+async function claimV2Rewards(periods) {
+  // Resolves for the active network; throws if no V2 distributor is configured.
+  const distributor = getContractsAddress('MerkleDistributorV2');
+  const claimable = [];
+  for (const p of periods) {
+    // All-zero bytes32 means the root is not published yet; read failures throw.
+    const root = await getMerkleRoot(p.merkleIndex, distributor);
+    if (root === `0x${'0'.repeat(64)}`) continue;
+    if (await isClaimed(p.merkleIndex, p.index, distributor)) continue;
+    claimable.push(p);
+  }
 
-// 1. (Optional) Pre-check: the all-zero bytes32 value means the root is not
-//    published yet; read failures throw.
-const claimable = [];
-for (const p of periods) {
-  const root = await getMerkleRoot(p.merkleIndex);
-  if (root === `0x${'0'.repeat(64)}`) continue;
-  if (await isClaimed(p.merkleIndex, p.index)) continue;
-  claimable.push(p);
+  if (claimable.length === 0) return null;
+  return await multiClaim(claimable, distributor);
 }
-
-// 2. Batch claim against the default MerkleDistributor (single-token signature)
-const tx = await multiClaim(claimable);
-console.log('TxID:', tx.transaction.txID);
-
-// 3. NEW USDD multi-token variant — pass the multi-token contract address
-//    and use an array for `amount` to switch the function signature automatically.
-const newUsddAddr = Config.contracts.main.MerkleDistributorNEWUSDD;
-await multiClaim(
-  [{ ...periods[0], amount: ['1000000', '500000'] }],
-  newUsddAddr,
-);
 ```
+
+The default `multiClaim(claims)` remains single-token for compatibility. To claim
+USDD single-token rewards, pass `getContractsAddress('MerkleDistributorNEWUSDD')`
+and that distributor's scalar-valued claims. Never reuse a proof for a different
+distributor or convert scalar amounts into arrays to switch deployments.
+
+`multiClaim` rejects empty batches, missing amounts, mixed scalar/array batches,
+empty amount arrays, and amount shapes incompatible with a known registry entry
+before transaction construction. Explicit custom distributor addresses still use
+the supplied amount shape to select the ABI; callers must verify their deployment
+and proofs. The SDK never silently reroutes claims. Neither multi-token deployment
+is configured on Nile; there is no mainnet fallback.
+
+Nile also has no verified **default single-token** reward distributor configured.
+Calling `getMerkleRoot`, `isClaimed`, or `multiClaim` without an explicit distributor
+on Nile fails with a clear "not configured" error before a chain call. Supply a
+verified Nile distributor and matching proofs/ABI explicitly; the former default
+was not a deployed contract on Nile and is no longer used.
 
 ### 4. Helpers
 
@@ -339,9 +392,9 @@ All main methods are exported from `systemV2.js`:
 | `liquidate` | Liquidate an unhealthy position via `PublicLiquidatorProxy` (by `seizedAssets` or by `repaidShares`) |
 | `getMerkleRoot` | View — read the on-chain Merkle root for a mining round; returns a bytes32 value (including the all-zero sentinel) and throws when the read fails |
 | `isClaimed` | View — check whether a `(merkleIndex, index)` pair has already been claimed |
-| `multiClaim` | Batch-claim V2 mining rewards across rounds; auto-selects the multi-token signature when `amount` is an array |
+| `multiClaim` | Batch-claim rewards; retains the single-token default and checks amount shape against known distributor ABIs |
 
-*Note: Methods involving lending usually require a `marketParams` object containing contract addresses for the Oracle, IRM, etc. The mining-reward methods target the `MerkleDistributor` (single-token) or `MerkleDistributorNEWUSDD` (multi-token) contracts configured per network in `src/config.js`.*
+*Note: Methods involving lending usually require a `marketParams` object containing contract addresses for the Oracle, IRM, etc. Reward reads and claims default to the legacy single-token `MerkleDistributor`; V2 mining requires explicitly passing `MerkleDistributorV2`. See the reward deployment table above.*
 
 ## Development
 
@@ -397,7 +450,7 @@ pnpm test
 
 The configuration file is located at `src/config.js`. Its **keyless, read-only fallback client** connects to **TRON Mainnet** through `https://api.trongrid.io`. This default cannot sign transactions. Write operations require an explicitly injected browser or Node.js TronWeb instance plus a sender address.
 
-Set `JUSTLEND_FULLHOST=https://nile.trongrid.io` to use Nile for the fallback client in Node.js. The built-in configuration accepts HTTPS TronGrid endpoints and loopback development URLs. For an operator-controlled custom node, also set `JUSTLEND_ALLOW_UNTRUSTED_FULLHOST=true` explicitly.
+Set `JUSTLEND_FULLHOST=https://nile.trongrid.io` or `https://api.nileex.io` to use Nile for the fallback client in Node.js. Both [official Nile HTTP endpoints](https://developers.tron.network/docs/networks#nile-testnet) are accepted and resolve to the same network. Known RPC hosts are matched exactly, not by substring. For an operator-controlled custom HTTPS node, set `JUSTLEND_ALLOW_UNTRUSTED_FULLHOST=true` and set `tronObj.network` explicitly; loopback development URLs are also allowed but still require an explicit network.
 
 ```javascript
 const Config = {
@@ -409,17 +462,19 @@ const Config = {
   trxPrecision: 1e6,
   contracts: {
     main: {
-      MoolahProxy: 'TRpY4gn6hHxA8x6oMtb3v3A37edkmaeY8j',
-      TrxProviderProxy: 'TGBHLgstjZQCRVNx3UZTD3UaQaWYxa4nM6',
-      MerkleDistributor: 'TQoiXqruw4SqYPwHAd6QiNZ3ES4rLsejAj',           // V2 mining (single-token)
-      MerkleDistributorNEWUSDD: 'TYxJzmeDyxuxFbaGywjivfkft75qLeS485',    // V2 mining (multi-token / NEW USDD)
+      MoolahProxy: 'TDH4dhmVQQNc1ZNudJwWzBcs2h6ahhWrpp',
+      TrxProviderProxy: 'TMDENHFSiRzmJNSEBAFmrDbLkQ672iPN8H',
+      MerkleDistributor: 'TQoiXqruw4SqYPwHAd6QiNZ3ES4rLsejAj',           // Legacy/general single-token
+      MerkleDistributorNEWUSDD: 'TYxJzmeDyxuxFbaGywjivfkft75qLeS485',    // Single-token USDD
+      MultiMerkleDistributor: 'TUsyCPRyQdMsn9WnJcssBFXtzg6bUVbty6',     // General multi-token
+      MerkleDistributorV2: 'TRiE1tGxBitNAMUazZ6Kk7GA36hpPdzUSL',        // SBM V2 mining, multi-token
       PublicLiquidatorProxy: 'TGDuQaHtvadVL5z9PMM874CaehQnwf3qJi',       // Liquidation entry point
       WtrxContractProxy: 'TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR',           // WTRX wrapper
     },
     nile: {
       MoolahProxy: 'TFgrgsd8c37ByaZx1YxpBzazJS8bHsoP5c',
       TrxProviderProxy: 'TMRZwenUVHPvnxhwDDQLY4SEmmwXvtKRjz',
-      MerkleDistributor: 'TKQ5VVJPsoZDD7NqQ8ffhFwzeRp45XLSGt',
+      // No default reward distributor: pass a verified Nile target explicitly.
       PublicLiquidatorProxy: 'TLvPrXHVQCA54gLQjLfoNi5XQ6WqhXCEps',
       WtrxContractProxy: 'TYsbWxNnyTgsZaTFaue9hqpxkU3Fkco94a',
     },
