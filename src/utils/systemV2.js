@@ -856,6 +856,47 @@ export const liquidate = async (
   return result;
 };
 
+// Registry keys describe ABI families, not the number of non-zero rewards.
+// Resolve from the current configuration so caller-supplied registry overrides
+// keep the same checks. Unknown explicit deployments retain shape-based encoding.
+const distributorAmountTypes = {
+  MerkleDistributor: 'single',
+  MerkleDistributorNEWUSDD: 'single',
+  MultiMerkleDistributor: 'multi',
+  MerkleDistributorV2: 'multi',
+};
+
+const assertClaimAmounts = (claims, distributorAddress) => {
+  if (!Array.isArray(claims) || claims.length === 0) {
+    throw new Error('multiClaim requires a non-empty claims array');
+  }
+  const isMultiToken = Array.isArray(claims[0]?.amount);
+  for (const claim of claims) {
+    if (claim?.amount == null) {
+      throw new Error('Every claim requires an amount');
+    }
+    if (Array.isArray(claim.amount) !== isMultiToken) {
+      throw new Error('All claims must use the same amount shape (scalar or array)');
+    }
+    if (isMultiToken && claim.amount.length === 0) {
+      throw new Error('Multi-token claims require a non-empty amount array');
+    }
+  }
+
+  const target = TronWeb.address.toHex(distributorAddress).toLowerCase();
+  for (const registry of Object.values(contracts)) {
+    for (const [key, type] of Object.entries(distributorAmountTypes)) {
+      const address = registry[key];
+      if (!address || !TronWeb.isAddress(address)) continue;
+      if (TronWeb.address.toHex(address).toLowerCase() !== target) continue;
+      if (isMultiToken !== (type === 'multi')) {
+        throw new Error(`${key} requires ${type === 'multi' ? 'an amount array' : 'a scalar amount'}`);
+      }
+    }
+  }
+  return isMultiToken;
+};
+
 export const multiClaim = async (
   claims,
   merkleDistributorAddress = getContractsAddress('MerkleDistributor'),
@@ -863,8 +904,9 @@ export const multiClaim = async (
 ) => {
   assertAddress(merkleDistributorAddress, "Merkle distributor address");
   //function multiClaim((uint256 merkleIndex,uint256 index,uint256 amount,bytes32[] merkleProof)[])
-  //function multiClaim((uint256 merkleIndex,uint256 index,uint256[] amounts,bytes32[] merkleProof)[]) - multi-token (NEW USDD) variant
-  const isMultiToken = Array.isArray(claims?.[0]?.amount);
+  //function multiClaim((uint256 merkleIndex,uint256 index,uint256[] amounts,bytes32[] merkleProof)[]) - multi-token variant
+  // Never reroute a proof based on its shape: callers must select its distributor.
+  const isMultiToken = assertClaimAmounts(claims, merkleDistributorAddress);
   const functionSelector = isMultiToken
     ? "multiClaim((uint256,uint256,uint256[],bytes32[])[])"
     : "multiClaim((uint256,uint256,uint256,bytes32[])[])";

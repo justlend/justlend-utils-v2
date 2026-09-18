@@ -1006,7 +1006,8 @@ describe('justlend v2 utils systemV2', () => {
     );
   });
 
-  it('multiClaim (multi-token / NEW USDD)', async () => {
+  it('multiClaim (V2 multi-token distributor)', async () => {
+    blockchain.tronObj.network = 'main';
     const claims = [
       {
         merkleIndex: '0',
@@ -1017,9 +1018,9 @@ describe('justlend v2 utils systemV2', () => {
         ],
       },
     ];
-    const merkleDistributor = Config.contracts.nile.MerkleDistributor;
+    const merkleDistributor = Config.contracts.main.MerkleDistributorV2;
 
-    await multiClaim(claims, merkleDistributor).catch(() => {});
+    await multiClaim(claims, merkleDistributor);
 
     expect(blockchain.triggerV2).toHaveBeenCalledWith(
       merkleDistributor,

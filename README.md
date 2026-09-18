@@ -39,7 +39,7 @@ The project includes core blockchain tool wrappers, helper functions, and a Reac
     * Repaying (`repay`).
 * **Native TRX Support**: Provides specialized proxy methods for handling native TRX interactions, including `depositTrxToVault`, `borrowTrx`, `depositTrxToWtrx` for TRX → WTRX wrapping, and `withdrawTrxFromWtrx` for WTRX → TRX unwrapping.
 * **Liquidation**: Public-liquidator entry points — preview the loan-token amount required (`getLoanTokenAmountNeed`) and execute the seizure (`liquidate`).
-* **V2 Mining Rewards**: Merkle-based reward distribution — query Merkle root readiness (`getMerkleRoot`), check per-user claim status (`isClaimed`), and batch-claim across rounds (`multiClaim`, with single-token and multi-token / NEW USDD variants).
+* **Reward Claim Helpers**: Query Merkle root readiness (`getMerkleRoot`), check per-user claim status (`isClaimed`), and batch-claim across rounds (`multiClaim`). Legacy/NEW USDD rewards use single-token amounts; general multi-token and SBM V2 rewards require their respective distributors and array amounts.
 * **Energy Estimation**: Includes tools for estimating transaction energy consumption (`estimateSupplyTrxGas`).
 * **Data Formatting**: Built-in `BigNumber` handling and amount formatting utilities.
 * **Wallet Adapter**: Integrated with `@tronweb3` wallet adapters, supporting TronLink.
@@ -173,6 +173,15 @@ read when the payer is supplied dynamically) after upgrading.
 
 ### 3. Contract Interactions
 
+Mainnet lending helpers default to the current V2 `MoolahProxy`
+(`TDH4dhmVQQNc1ZNudJwWzBcs2h6ahhWrpp`) and `TrxProviderProxy`
+(`TMDENHFSiRzmJNSEBAFmrDbLkQ672iPN8H`). Nile defaults are unchanged.
+Updating these defaults does **not** migrate positions or token allowances from
+legacy deployments. Integrations managing legacy positions must keep passing the
+corresponding legacy proxy explicitly; integrations using the current deployment
+must check allowances against the actual spender. No approval or migration is
+performed automatically.
+
 **Deposit to Vault**
 
 ```javascript
@@ -273,41 +282,56 @@ await withdrawTrxFromWtrx(100);
 
 **Claim V2 Mining Rewards**
 
+Reward deployments have different ABIs and independent Merkle roots:
+
+| Registry key | Purpose | `claim.amount` |
+| --- | --- | --- |
+| `MerkleDistributor` | Legacy/general single-token rewards; existing helper default | Scalar raw amount |
+| `MerkleDistributorNEWUSDD` | Single-token USDD rewards; **not** a multi-token distributor | Scalar raw amount |
+| `MultiMerkleDistributor` | General multi-token rewards | Array of raw amounts |
+| `MerkleDistributorV2` | SBM V2 mining rewards | Array of raw amounts |
+
+For V2 mining, explicitly select `MerkleDistributorV2` for **both reads and the
+claim**. Supply periods/proofs from the backend for that exact distributor and
+account. Each period has `{ merkleIndex, index, amount, merkleProof }`, where
+`amount` is an array of integer strings in token base units. Preserve the backend's
+token order and **all zero slots**, even when only one token has a non-zero reward.
+These entries describe contract capabilities, not whether a mining campaign is
+active. Claim only when the relevant campaign has published claimable rewards.
+Multi-token ABI support does not imply that every token currently earns rewards.
+
 ```javascript
-import { getMerkleRoot, isClaimed, multiClaim, Config } from 'justlend-v2-utils';
+import { getContractsAddress, getMerkleRoot, isClaimed, multiClaim } from 'justlend-v2-utils';
 
-// Round/proof data is supplied by the JustLend backend
-const periods = [
-  {
-    merkleIndex: '12',
-    index: '345',
-    amount: '1000000',          // single-token: a string
-    merkleProof: ['0xabc...', '0xdef...'],
-  },
-];
+// `periods` must contain V2 proofs and array-valued amounts for the sender.
+async function claimV2Rewards(periods) {
+  // Resolves for the active network; throws if no V2 distributor is configured.
+  const distributor = getContractsAddress('MerkleDistributorV2');
+  const claimable = [];
+  for (const p of periods) {
+    // All-zero bytes32 means the root is not published yet; read failures throw.
+    const root = await getMerkleRoot(p.merkleIndex, distributor);
+    if (root === `0x${'0'.repeat(64)}`) continue;
+    if (await isClaimed(p.merkleIndex, p.index, distributor)) continue;
+    claimable.push(p);
+  }
 
-// 1. (Optional) Pre-check: the all-zero bytes32 value means the root is not
-//    published yet; read failures throw.
-const claimable = [];
-for (const p of periods) {
-  const root = await getMerkleRoot(p.merkleIndex);
-  if (root === `0x${'0'.repeat(64)}`) continue;
-  if (await isClaimed(p.merkleIndex, p.index)) continue;
-  claimable.push(p);
+  if (claimable.length === 0) return null;
+  return await multiClaim(claimable, distributor);
 }
-
-// 2. Batch claim against the default MerkleDistributor (single-token signature)
-const tx = await multiClaim(claimable);
-console.log('TxID:', tx.transaction.txID);
-
-// 3. NEW USDD multi-token variant — pass the multi-token contract address
-//    and use an array for `amount` to switch the function signature automatically.
-const newUsddAddr = Config.contracts.main.MerkleDistributorNEWUSDD;
-await multiClaim(
-  [{ ...periods[0], amount: ['1000000', '500000'] }],
-  newUsddAddr,
-);
 ```
+
+The default `multiClaim(claims)` remains single-token for compatibility. To claim
+USDD single-token rewards, pass `getContractsAddress('MerkleDistributorNEWUSDD')`
+and that distributor's scalar-valued claims. Never reuse a proof for a different
+distributor or convert scalar amounts into arrays to switch deployments.
+
+`multiClaim` rejects empty batches, missing amounts, mixed scalar/array batches,
+empty amount arrays, and amount shapes incompatible with a known registry entry
+before transaction construction. Explicit custom distributor addresses still use
+the supplied amount shape to select the ABI; callers must verify their deployment
+and proofs. The SDK never silently reroutes claims. Neither multi-token deployment
+is configured on Nile; there is no mainnet fallback.
 
 ### 4. Helpers
 
@@ -339,9 +363,9 @@ All main methods are exported from `systemV2.js`:
 | `liquidate` | Liquidate an unhealthy position via `PublicLiquidatorProxy` (by `seizedAssets` or by `repaidShares`) |
 | `getMerkleRoot` | View — read the on-chain Merkle root for a mining round; returns a bytes32 value (including the all-zero sentinel) and throws when the read fails |
 | `isClaimed` | View — check whether a `(merkleIndex, index)` pair has already been claimed |
-| `multiClaim` | Batch-claim V2 mining rewards across rounds; auto-selects the multi-token signature when `amount` is an array |
+| `multiClaim` | Batch-claim rewards; retains the single-token default and checks amount shape against known distributor ABIs |
 
-*Note: Methods involving lending usually require a `marketParams` object containing contract addresses for the Oracle, IRM, etc. The mining-reward methods target the `MerkleDistributor` (single-token) or `MerkleDistributorNEWUSDD` (multi-token) contracts configured per network in `src/config.js`.*
+*Note: Methods involving lending usually require a `marketParams` object containing contract addresses for the Oracle, IRM, etc. Reward reads and claims default to the legacy single-token `MerkleDistributor`; V2 mining requires explicitly passing `MerkleDistributorV2`. See the reward deployment table above.*
 
 ## Development
 
@@ -409,10 +433,12 @@ const Config = {
   trxPrecision: 1e6,
   contracts: {
     main: {
-      MoolahProxy: 'TRpY4gn6hHxA8x6oMtb3v3A37edkmaeY8j',
-      TrxProviderProxy: 'TGBHLgstjZQCRVNx3UZTD3UaQaWYxa4nM6',
-      MerkleDistributor: 'TQoiXqruw4SqYPwHAd6QiNZ3ES4rLsejAj',           // V2 mining (single-token)
-      MerkleDistributorNEWUSDD: 'TYxJzmeDyxuxFbaGywjivfkft75qLeS485',    // V2 mining (multi-token / NEW USDD)
+      MoolahProxy: 'TDH4dhmVQQNc1ZNudJwWzBcs2h6ahhWrpp',
+      TrxProviderProxy: 'TMDENHFSiRzmJNSEBAFmrDbLkQ672iPN8H',
+      MerkleDistributor: 'TQoiXqruw4SqYPwHAd6QiNZ3ES4rLsejAj',           // Legacy/general single-token
+      MerkleDistributorNEWUSDD: 'TYxJzmeDyxuxFbaGywjivfkft75qLeS485',    // Single-token USDD
+      MultiMerkleDistributor: 'TUsyCPRyQdMsn9WnJcssBFXtzg6bUVbty6',     // General multi-token
+      MerkleDistributorV2: 'TRiE1tGxBitNAMUazZ6Kk7GA36hpPdzUSL',        // SBM V2 mining, multi-token
       PublicLiquidatorProxy: 'TGDuQaHtvadVL5z9PMM874CaehQnwf3qJi',       // Liquidation entry point
       WtrxContractProxy: 'TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR',           // WTRX wrapper
     },
