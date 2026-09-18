@@ -175,7 +175,7 @@ read when the payer is supplied dynamically) after upgrading.
 
 Mainnet lending helpers default to the current V2 `MoolahProxy`
 (`TDH4dhmVQQNc1ZNudJwWzBcs2h6ahhWrpp`) and `TrxProviderProxy`
-(`TMDENHFSiRzmJNSEBAFmrDbLkQ672iPN8H`). Nile defaults are unchanged.
+(`TMDENHFSiRzmJNSEBAFmrDbLkQ672iPN8H`). Nile lending defaults are unchanged.
 Updating these defaults does **not** migrate positions or token allowances from
 legacy deployments. Integrations managing legacy positions must keep passing the
 corresponding legacy proxy explicitly; integrations using the current deployment
@@ -211,6 +211,28 @@ const handleDeposit = async () => {
 
 ```
 
+**Asset amounts versus raw shares**
+
+`repay`, `redeemFromVault`, `redeemTrxFromVault`, `getLoanTokenAmountNeed`, and
+`liquidate` accept either a human-readable asset amount or a raw share count.
+Omitted/null shares and numeric, string, bigint, or BigNumber zero all select
+asset mode. Positive shares select share mode: pass zero or null for the asset
+amount instead of specifying both. Invalid, negative, fractional, unsafe-number,
+or overflowing uint256 share counts are rejected before any chain call. Use an
+integer string for large share counts; shares are never decimal-scaled by the SDK.
+
+For `redeemTrxFromVault(vault, assets, legacyDecimals, shares, receiver, owner, ...)`,
+the third argument is deprecated and ignored, but its position is retained for
+compatibility. Asset withdrawals always convert human TRX to SUN at **6 decimals**,
+even if the vault's share token uses 18 decimals. Pass `undefined` in that slot in
+new code. In share mode, pass the raw share integer without rescaling it.
+
+`repayWithTrx` uses the same numeric zero/share validation. Its `amount` has an
+additional role in share mode: it remains the human-TRX funding budget for
+`callValue`, not a second repayment selector. An explicit `sharesCallValueAmount`
+is already in SUN and takes precedence as the funding budget; the share count
+must not be used as the TRX payment amount.
+
 **Supply Collateral**
 
 ```javascript
@@ -240,7 +262,7 @@ const tx = await supplyCollateral(
 **Liquidate an Unhealthy Position**
 
 ```javascript
-import { getLoanTokenAmountNeed, liquidate, approve, getAllowance, Config } from 'justlend-v2-utils';
+import { getLoanTokenAmountNeed, liquidate, approve, getAllowance, getContractsAddress } from 'justlend-v2-utils';
 
 const marketId = '0x...'; // bytes32 — fetched from Moolah `getId(marketParams)`
 const borrower = 'TBorrowerAddress...';
@@ -248,24 +270,25 @@ const loanTokenAddr = 'TLoanTokenAddress...';
 const userAddr = 'TYourAddress...';
 const seizedAssets = '50';   // collateral to seize (human-readable)
 const decimals = 18;
+// Resolve once for the active network. Use this same target for the whole flow.
+const liquidatorAddr = getContractsAddress('PublicLiquidatorProxy');
 
 // 1. Preview how many loan tokens you need to repay
-const need = await getLoanTokenAmountNeed(marketId, seizedAssets, null, decimals);
+const need = await getLoanTokenAmountNeed(marketId, seizedAssets, null, decimals, liquidatorAddr);
 console.log('Loan tokens required:', need.toString());
 
 // 2. Approve the PublicLiquidator on the loan token if needed
-const liquidatorAddr = Config.contracts.main.PublicLiquidatorProxy;
 const allowance = await getAllowance(loanTokenAddr, userAddr, liquidatorAddr);
 if (allowance.lt(need)) {
   await approve(loanTokenAddr, liquidatorAddr, { amount: need.toFixed(0) });
 }
 
 // 3. Execute the liquidation
-const tx = await liquidate(marketId, borrower, seizedAssets, null, decimals);
+const tx = await liquidate(marketId, borrower, seizedAssets, null, decimals, liquidatorAddr);
 console.log('TxID:', tx.transaction.txID);
 
 // Alternatively, liquidate by repaidShares — pass shares as the 4th arg, set seizedAssets to 0:
-// await liquidate(marketId, borrower, 0, '500000000', 6);
+// await liquidate(marketId, borrower, 0, '500000000', 6, liquidatorAddr);
 ```
 
 **Wrap TRX ↔ WTRX**
@@ -332,6 +355,12 @@ before transaction construction. Explicit custom distributor addresses still use
 the supplied amount shape to select the ABI; callers must verify their deployment
 and proofs. The SDK never silently reroutes claims. Neither multi-token deployment
 is configured on Nile; there is no mainnet fallback.
+
+Nile also has no verified **default single-token** reward distributor configured.
+Calling `getMerkleRoot`, `isClaimed`, or `multiClaim` without an explicit distributor
+on Nile fails with a clear "not configured" error before a chain call. Supply a
+verified Nile distributor and matching proofs/ABI explicitly; the former default
+was not a deployed contract on Nile and is no longer used.
 
 ### 4. Helpers
 
@@ -421,7 +450,7 @@ pnpm test
 
 The configuration file is located at `src/config.js`. Its **keyless, read-only fallback client** connects to **TRON Mainnet** through `https://api.trongrid.io`. This default cannot sign transactions. Write operations require an explicitly injected browser or Node.js TronWeb instance plus a sender address.
 
-Set `JUSTLEND_FULLHOST=https://nile.trongrid.io` to use Nile for the fallback client in Node.js. The built-in configuration accepts HTTPS TronGrid endpoints and loopback development URLs. For an operator-controlled custom node, also set `JUSTLEND_ALLOW_UNTRUSTED_FULLHOST=true` explicitly.
+Set `JUSTLEND_FULLHOST=https://nile.trongrid.io` or `https://api.nileex.io` to use Nile for the fallback client in Node.js. Both [official Nile HTTP endpoints](https://developers.tron.network/docs/networks#nile-testnet) are accepted and resolve to the same network. Known RPC hosts are matched exactly, not by substring. For an operator-controlled custom HTTPS node, set `JUSTLEND_ALLOW_UNTRUSTED_FULLHOST=true` and set `tronObj.network` explicitly; loopback development URLs are also allowed but still require an explicit network.
 
 ```javascript
 const Config = {
@@ -445,7 +474,7 @@ const Config = {
     nile: {
       MoolahProxy: 'TFgrgsd8c37ByaZx1YxpBzazJS8bHsoP5c',
       TrxProviderProxy: 'TMRZwenUVHPvnxhwDDQLY4SEmmwXvtKRjz',
-      MerkleDistributor: 'TKQ5VVJPsoZDD7NqQ8ffhFwzeRp45XLSGt',
+      // No default reward distributor: pass a verified Nile target explicitly.
       PublicLiquidatorProxy: 'TLvPrXHVQCA54gLQjLfoNi5XQ6WqhXCEps',
       WtrxContractProxy: 'TYsbWxNnyTgsZaTFaue9hqpxkU3Fkco94a',
     },

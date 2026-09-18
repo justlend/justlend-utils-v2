@@ -89,16 +89,15 @@ describe('current V2 deployment routing', () => {
     expect(blockchain.triggerV2).not.toHaveBeenCalled();
   });
 
-  it('keeps Nile unchanged and never falls back to mainnet for missing reward deployments', () => {
+  it('keeps Nile lending addresses and fails closed for unconfigured reward deployments', () => {
     blockchain.tronObj.network = 'nile';
     expect(Config.contracts.nile).toEqual({
       MoolahProxy: 'TFgrgsd8c37ByaZx1YxpBzazJS8bHsoP5c',
       TrxProviderProxy: 'TMRZwenUVHPvnxhwDDQLY4SEmmwXvtKRjz',
-      MerkleDistributor: 'TKQ5VVJPsoZDD7NqQ8ffhFwzeRp45XLSGt',
       PublicLiquidatorProxy: 'TLvPrXHVQCA54gLQjLfoNi5XQ6WqhXCEps',
       WtrxContractProxy: 'TYsbWxNnyTgsZaTFaue9hqpxkU3Fkco94a',
     });
-    for (const key of ['MerkleDistributorNEWUSDD', 'MultiMerkleDistributor', 'MerkleDistributorV2']) {
+    for (const key of ['MerkleDistributor', 'MerkleDistributorNEWUSDD', 'MultiMerkleDistributor', 'MerkleDistributorV2']) {
       expect(() => system.getContractsAddress(key)).toThrow(`No ${key} contract is configured for TRON network "nile"`);
     }
   });

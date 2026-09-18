@@ -17,6 +17,7 @@ const TRUSTED_TRONGRID_HOSTS = new Set([
   'api.trongrid.io',
   'api.tronstack.io',
   'nile.trongrid.io',
+  'api.nileex.io',
   'api.shasta.trongrid.io',
   'shasta.trongrid.io',
 ]);
@@ -81,7 +82,8 @@ const Config = {
    nile:{
      MoolahProxy: 'TFgrgsd8c37ByaZx1YxpBzazJS8bHsoP5c',
      TrxProviderProxy: 'TMRZwenUVHPvnxhwDDQLY4SEmmwXvtKRjz',
-     MerkleDistributor: 'TKQ5VVJPsoZDD7NqQ8ffhFwzeRp45XLSGt',
+     // No verified default single-token distributor on Nile. Reward helpers
+     // fail closed unless the caller supplies a verified deployment explicitly.
      PublicLiquidatorProxy: 'TLvPrXHVQCA54gLQjLfoNi5XQ6WqhXCEps',
      WtrxContractProxy: 'TYsbWxNnyTgsZaTFaue9hqpxkU3Fkco94a',
    }

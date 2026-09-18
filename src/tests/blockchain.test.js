@@ -28,9 +28,15 @@ describe('getNetworkType', () => {
     tronObj.tronWeb = { fullNode: { host } };
   };
 
-  it('infers nile from the node host', () => {
-    withHost('https://nile.trongrid.io');
+  it.each([
+    'https://nile.trongrid.io',
+    'https://api.nileex.io',
+    'https://API.NILEEX.IO/',
+    'https://api.nileex.io/wallet',
+  ])('infers Nile and resolves its registry from %s', host => {
+    withHost(host);
     expect(getNetworkType()).toBe('nile');
+    expect(getContractsAddress('MoolahProxy')).toBe('TFgrgsd8c37ByaZx1YxpBzazJS8bHsoP5c');
   });
 
   it('infers shasta from the node host (no longer mislabeled as main)', () => {
@@ -60,6 +66,10 @@ describe('getNetworkType', () => {
     withHost('https://wallet-proxy.example.com');
     expect(() => getNetworkType()).toThrow(/Unknown TRON provider host/i);
     withHost('https://api.trongrid.io.attacker.example');
+    expect(() => getNetworkType()).toThrow(/Unknown TRON provider host/i);
+    withHost('https://api.nileex.io.attacker.example');
+    expect(() => getNetworkType()).toThrow(/Unknown TRON provider host/i);
+    withHost('https://api.nileex.io@attacker.example');
     expect(() => getNetworkType()).toThrow(/Unknown TRON provider host/i);
   });
 

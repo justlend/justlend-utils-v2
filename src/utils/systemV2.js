@@ -71,6 +71,31 @@ const toTrxChainAmount = (amount) => {
   return a.times(trxPrecision).integerValue(BigNumber.ROUND_DOWN).toFixed(0);
 };
 
+// Shares are already raw uint256 units, not human-readable token amounts.
+// Normalize numeric/string/BigNumber zero identically and reject lossy numbers
+// before choosing a transaction mode or reaching any chain call.
+const parseRawShares = (value) => {
+  if (value == null) return new BigNumber(0);
+  const supported = ['string', 'number', 'bigint'].includes(typeof value) || BigNumber.isBigNumber(value);
+  if (!supported || (typeof value === 'number' && !Number.isSafeInteger(value))) {
+    throw new Error('Invalid shares: use a non-negative uint256 integer string for large values');
+  }
+  const shares = new BigNumber(typeof value === 'bigint' ? value.toString() : value);
+  if (!shares.isFinite() || !shares.isInteger() || shares.lt(0) || shares.gt(MAX_UINT256)) {
+    throw new Error('Invalid shares: expected a non-negative uint256 integer');
+  }
+  return shares;
+};
+
+const resolveAmountMode = (assets, rawShares) => {
+  const shares = parseRawShares(rawShares);
+  const byShares = shares.gt(0);
+  if (byShares && assets != null && !new BigNumber(assets).isZero()) {
+    throw new Error('Choose assets or shares, not both; set assets to zero or null for share-based operations');
+  }
+  return { byShares, shares: shares.toFixed(0) };
+};
+
 // True for TetherToken-class tokens (TRON USDT/USDJ) whose `approve` REVERTs on
 // a non-zero→non-zero change and therefore needs an approve(0) reset first.
 // Compares in canonical hex so Base58/hex inputs both match.
@@ -127,14 +152,15 @@ export const redeemFromVault = async (
   assertAddress(vaultAddress, "vault address");
   assertAddress(receiver, "receiver address");
   assertAddress(owner, "owner address");
+  const mode = resolveAmountMode(assets, shares);
   //function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256 shares)
   let functionSelector = "withdraw(uint256,address,address)";
   //function redeem(uint256 shares, address payable receiver, address owner) external returns (uint256 assets)
-  if (shares) functionSelector = "redeem(uint256,address,address)";
+  if (mode.byShares) functionSelector = "redeem(uint256,address,address)";
   const parameters = [
     {
       type: "uint256",
-      value: shares ? shares : toChainAmount(assets, decimals),
+      value: mode.byShares ? mode.shares : toChainAmount(assets, decimals),
     },
     { type: "address", value: receiver },
     { type: "address", value: owner },
@@ -300,6 +326,7 @@ export const repay = async (
   assertMarketParams(marketParams);
   assertAddress(onBehalf, "on-behalf address");
   assertAddress(moolahAddress, "Moolah proxy address");
+  const mode = resolveAmountMode(amount, sharesAmount);
   //function repay( MarketParams calldata marketParams,uint256 assets,uint256 shares,address onBehalf,bytes calldata data) external payable returns (uint256 _assets, uint256 _shares)
   const functionSelector =
     "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)";
@@ -323,9 +350,9 @@ export const repay = async (
     },
     {
       type: "uint256",
-      value: sharesAmount ? 0 : toChainAmount(amount, decimals),
+      value: mode.byShares ? 0 : toChainAmount(amount, decimals),
     },
-    { type: "uint256", value: sharesAmount ? sharesAmount : 0 },
+    { type: "uint256", value: mode.byShares ? mode.shares : 0 },
     { type: "address", value: onBehalf },
     { type: "bytes", value: "0x" },
   ];
@@ -368,7 +395,7 @@ export const depositTrxToVault = async (
 export const redeemTrxFromVault = async (
   vaultAddress,
   assets,
-  vaultShareDecimals,
+  _legacyDecimals, // Deprecated positional argument; TRX assets always use 6 decimals.
   shares,
   receiver,
   owner,
@@ -380,14 +407,15 @@ export const redeemTrxFromVault = async (
   assertAddress(owner, "owner address");
   assertAddress(trxProviderProxy, "TRX provider proxy address");
   //function withdraw(address vault, uint256 assets, address payable receiver, address owner) external returns (uint256 shares)
+  const mode = resolveAmountMode(assets, shares);
   let functionSelector = "withdraw(address,uint256,address,address)";
   //function redeem(address vault, uint256 shares, address payable receiver, address owner) external returns (uint256 assets)
-  if (shares) functionSelector = "redeem(address,uint256,address,address)";
+  if (mode.byShares) functionSelector = "redeem(address,uint256,address,address)";
   const parameters = [
     { type: "address", value: vaultAddress },
     {
       type: "uint256",
-      value: shares ? shares : toChainAmount(assets, vaultShareDecimals),
+      value: mode.byShares ? mode.shares : toTrxChainAmount(assets),
     },
     { type: "address", value: receiver }, // receiver
     { type: "address", value: owner }, // owner
@@ -505,6 +533,8 @@ export const repayWithTrx = async (
   assertMarketParams(marketParams);
   assertAddress(onBehalf, "on-behalf address");
   assertAddress(trxProviderProxy, "TRX provider proxy address");
+  const shares = parseRawShares(sharesAmount);
+  const byShares = shares.gt(0);
   //function repay( MarketParams calldata marketParams,uint256 assets,uint256 shares,address onBehalf,bytes calldata data) external payable returns (uint256 _assets, uint256 _shares)
   const functionSelector =
     "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)";
@@ -515,7 +545,9 @@ export const repayWithTrx = async (
     irm,
     lltv,
   } = marketParams;
-  const assets = toTrxChainAmount(amount);
+  // In share mode, `amount` remains a human-TRX funding budget, not a second
+  // repayment selector. An explicit raw-SUN budget can fund the call instead.
+  const assets = toTrxChainAmount(byShares && amount == null ? 0 : amount);
   let callValue = assets;
   if (sharesCallValueAmount != null) {
     // `sharesCallValueAmount` is already expressed in SUN, but it is still a
@@ -539,8 +571,8 @@ export const repayWithTrx = async (
         BigNumber(lltv).times(1e18).toString(),
       ],
     },
-    { type: "uint256", value: sharesAmount ? 0 : assets },
-    { type: "uint256", value: sharesAmount ? sharesAmount : 0 },
+    { type: "uint256", value: byShares ? 0 : assets },
+    { type: "uint256", value: byShares ? shares.toFixed(0) : 0 },
     { type: "address", value: onBehalf },
     { type: "bytes", value: "0x" },
   ];
@@ -801,15 +833,16 @@ export const getLoanTokenAmountNeed = async (
   publicLiquidatorProxy = getContractsAddress('PublicLiquidatorProxy'),
 ) => {
   assertAddress(publicLiquidatorProxy, "public liquidator proxy address");
+  const mode = resolveAmountMode(seizedAssets, repaidShares);
   //function loanTokenAmountNeed(bytes32,uint256,uint256) external view returns (uint256)
   const funcSelector = "loanTokenAmountNeed(bytes32,uint256,uint256)";
   const parameters = [
     { type: "bytes32", value: marketId },
     {
       type: "uint256",
-      value: repaidShares ? 0 : toChainAmount(seizedAssets, decimals),
+      value: mode.byShares ? 0 : toChainAmount(seizedAssets, decimals),
     },
-    { type: "uint256", value: repaidShares || 0 },
+    { type: "uint256", value: mode.byShares ? mode.shares : 0 },
   ];
   const result = await view(publicLiquidatorProxy, funcSelector, parameters);
   // `view()` returns [] only on read failure (node 5xx/SERVER_BUSY/network/
@@ -836,6 +869,7 @@ export const liquidate = async (
 ) => {
   assertTronAddress(borrower, "borrower address");
   assertAddress(publicLiquidatorProxy, "public liquidator proxy address");
+  const mode = resolveAmountMode(seizedAssets, repaidShares);
   //function liquidate(bytes32 marketId,address borrower,uint256 seizedAssets,uint256 repaidShares)
   const functionSelector = "liquidate(bytes32,address,uint256,uint256)";
   const parameters = [
@@ -843,9 +877,9 @@ export const liquidate = async (
     { type: "address", value: borrower },
     {
       type: "uint256",
-      value: repaidShares ? 0 : toChainAmount(seizedAssets, decimals),
+      value: mode.byShares ? 0 : toChainAmount(seizedAssets, decimals),
     },
-    { type: "uint256", value: repaidShares || 0 },
+    { type: "uint256", value: mode.byShares ? mode.shares : 0 },
   ];
   const result = await triggerV2(
     publicLiquidatorProxy,
