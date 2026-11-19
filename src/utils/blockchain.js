@@ -155,11 +155,10 @@ export const triggerSmartContract = async (
 
 export const sendRawTransaction = async (signedTransaction) => {
   try {
-    const result =
-      await tronObj.tronWeb.trx.sendRawTransaction(signedTransaction);
-    return result;
-  } catch (error) {
-    throw error;
+    return await tronObj.tronWeb.trx.sendRawTransaction(signedTransaction);
+  } catch {
+    // Transport errors can retain the signed request in their metadata.
+    throw new Error("Broadcast request failed");
   }
 };
 
@@ -208,8 +207,13 @@ export const triggerV2 = async (
     // false success signal. The node's broadcast verdict is `result.result === true`;
     // use it as the sole criterion (fail-closed) and surface the failure code.
     if (!result?.result) {
-      const reason = result?.code || result?.message || "broadcast rejected by node";
-      throw new Error(`Broadcast failed: ${reason} — ${JSON.stringify(result)}`);
+      // The SDK also returns the full signed transaction on failure. Never
+      // serialize that response into errors/logs: a rejected tx may be retried.
+      // Accept only a bounded node error code, not arbitrary response messages.
+      const reason = typeof result?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(result.code)
+        ? result.code
+        : "broadcast rejected by node";
+      throw new Error(`Broadcast failed: ${reason}`);
     }
 
     return result;
